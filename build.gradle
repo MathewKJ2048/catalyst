@@ -1,0 +1,25 @@
+plugins {
+  id 'com.github.johnrengelman.shadow' version '6.1.0'
+  id 'java'
+}
+
+apply plugin: 'application'
+
+mainClassName = 'alloymodelsettools.AlloyModelSetTools'
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation "org.kohsuke:github-api:1.127"
+    implementation "commons-codec:commons-codec:1.15"
+}
+
+jar {
+    archiveBaseName = 'alloymodelsettools'
+    archiveVersion =  '0.1.0'
+    manifest {
+        attributes 'Main-Class': 'alloymodelsettools.AlloyModelSetTools'
+    }
+}
