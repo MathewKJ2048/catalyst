@@ -59,14 +59,16 @@ public class AlloyModelSetTools {
     // each function to add something to the README.md file of the new model-set directory
     // gather: from github
     // gather: from existing model-sets (might be ones others added in here)
-    // filter: remove non-Alloy files 
-    // filter: remove duplicate models
-    // filter: remove Alloy util models
-    // filter: randomly choose one model from each directory
-    // filter: remove those that don't compile in Alloy
-    // fcn: choose scopes for a model and record these in a .csv
-    // fcn: run alloy analyzer on models with certain scopes
-    // filter: ones that have transitive closure or other syntactic features
+    // filter: remove non-Alloy files (only  keep files with .als extension - lower case)
+    // filter: remove Alloy util/library models (util.als, ordering.als - there is a standard list)
+    // filter: remove duplicate models (filenames or contents of files?)
+    // filter: randomly choose one model from each directory (Elias to think about)
+    //
+    // for the following we need to run alloy
+    // filter: remove those that raise an error in Alloy
+    // fcn: choose scopes for a model and record these in a .csv (KT and Elias both have some relevant code)
+    //      write new alloy files with these scopes (Tamjid has code that writes Alloy models)
+    // filter: ones that have transitive closure or other syntactic features (KT has code for this)
     // filter: models that are SAT/UNSAT in kodkod
 
     static Integer CreateModelSetDir() {
