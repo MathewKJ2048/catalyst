@@ -2,6 +2,10 @@
 
 Alloy models is a repository of Alloy models and contains scripts for scraping Alloy models and filtering these sets for particular characteristics.
 
+This repo is for internal Watform member use only.  The downloaded Alloy files from github may not have permissions for us to make them publicly available to others.
+
+[NAD: we need to think about what that means for making our artefacts public for papers.]
+
 ## Using the Model Sets
 
 The directory "models-sets" contains sets of Alloy models (sometimes within the directory hierarchy they came with) created for various purposes.  Each directory is dated by the date is was created.  The README.md file within with model set directory tells you what filters (programmatically or manually) to create this model set.
