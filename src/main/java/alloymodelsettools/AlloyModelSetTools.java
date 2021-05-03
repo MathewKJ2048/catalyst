@@ -89,6 +89,7 @@ public class AlloyModelSetTools {
 
     static Integer GatherFromGithub() {
 
+	// Elias - explain the github query
     	String query = "language:alloy NOT ableton NOT midi NOT music NOT mIRC -repo:AlloyTools/models";
         boolean showDescriptions = false;
         boolean useSSHUrl = false;    // whether to use the SSH protocol for cloning, or HTTPS
