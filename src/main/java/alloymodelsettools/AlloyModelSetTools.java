@@ -91,7 +91,9 @@ public class AlloyModelSetTools {
 
     static Integer GatherFromGithub() {
 
-	// Elias - explain the github query
+	// the query searches repositories that have files written in the Alloy language, but excludes repositories 
+	// that have files written in ableton, midi, music and mIRC (since they also use the .als extension).
+	// the query also EXCLUDES the AlloyTools/models repository.
     	String query = "language:alloy NOT ableton NOT midi NOT music NOT mIRC -repo:AlloyTools/models";
         boolean showDescriptions = false;
         boolean useSSHUrl = false;    // whether to use the SSH protocol for cloning, or HTTPS
