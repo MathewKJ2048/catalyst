@@ -26,11 +26,16 @@ import java.io.FileWriter;
 import java.io.InputStreamReader;
 import java.io.BufferedReader;
 
-import java.time.format.DateTimeFormatter;  
-import java.time.LocalDateTime;    
+import java.time.format.DateTimeFormatter;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 import org.kohsuke.github.*;
+
 import static org.apache.commons.codec.digest.MessageDigestAlgorithms.SHA_256;
+
 import org.apache.commons.codec.digest.DigestUtils;
 import org.apache.commons.codec.binary.Base32;
 
@@ -39,9 +44,10 @@ import org.apache.commons.codec.binary.Base32;
 
 public class AlloyModelSetTools {
 
-	static FileWriter readmefile;
-	static String dirname;
-	// stdio is used for error output
+    static FileWriter readmefile;
+    static String dirname;
+    static int numGitRepos = 5;
+    // stdio is used for error output
 
     static String sha256(String s) {
         return new Base32().encodeAsString(new DigestUtils(SHA_256).digest(s));
@@ -72,29 +78,29 @@ public class AlloyModelSetTools {
     // filter: models that are SAT/UNSAT in kodkod
 
     static Integer CreateModelSetDir() {
-    	try {
-	    	DateTimeFormatter dtf = DateTimeFormatter.ofPattern("yyyy-MM-dd-HH-mm-ss");  
-	   		LocalDateTime now = LocalDateTime.now();
-	   		dirname = "model-sets/"+ dtf.format(now); 
-	   		String readmefilename =  dirname + "/" + "README.md";
+        try {
+            DateTimeFormatter dtf = DateTimeFormatter.ofPattern("yyyy-MM-dd-HH-mm-ss");
+            LocalDateTime now = LocalDateTime.now();
+            dirname = "model-sets/" + dtf.format(now);
+            String readmefilename = dirname + "/" + "README.md";
 
-			File f = new File(readmefilename);
-			f.getParentFile().mkdirs();
-	    	readmefile = new FileWriter(readmefilename);	    	
-	    	readmefile.write("Model set created: "+dirname+"\n");
-	    	return 0;
-	    } catch (Exception e) {
-	    	System.out.println("An error occurred creating the model set directory and/or README.md file");
-	    	return 1;
-	    }
+            File f = new File(readmefilename);
+            f.getParentFile().mkdirs();
+            readmefile = new FileWriter(readmefilename);
+            readmefile.write("Model set created: " + dirname + "\n");
+            return 0;
+        } catch (Exception e) {
+            System.out.println("An error occurred creating the model set directory and/or README.md file");
+            return 1;
+        }
     }
 
     static Integer GatherFromGithub() {
 
-	// the query searches repositories that have files written in the Alloy language, but excludes repositories 
-	// that have files written in ableton, midi, music and mIRC (since they also use the .als extension).
-	// the query also EXCLUDES the AlloyTools/models repository.
-    	String query = "language:alloy NOT ableton NOT midi NOT music NOT mIRC -repo:AlloyTools/models";
+        // the query searches repositories that have files written in the Alloy language, but excludes repositories
+        // that have files written in ableton, midi, music and mIRC (since they also use the .als extension).
+        // the query also EXCLUDES the AlloyTools/models repository.
+        String query = "language:alloy NOT ableton NOT midi NOT music NOT mIRC -repo:AlloyTools/models";
         boolean showDescriptions = false;
         boolean useSSHUrl = false;    // whether to use the SSH protocol for cloning, or HTTPS
         boolean prependSHA256 = true; // whether to prepend SHA-256 of url to folder name (to obtain unique names)
@@ -106,88 +112,107 @@ public class AlloyModelSetTools {
 
         try {
             gh = GitHub.connect();
-        	if (gh == null) {
-            	System.out.println("Connection to GitHub failed");
-            	return 1;
-        	}
-        	System.out.println("Connected to GitHub");
-        	
-        	PagedSearchIterable<GHRepository> repos = gh.searchRepositories().q(query).list();
+            if (gh == null) {
+                System.out.println("Connection to GitHub failed");
+                return 1;
+            }
+            System.out.println("Connected to GitHub");
 
-        	System.out.println("Search query: " + query);
-        	Integer numresults = repos.getTotalCount();
-        	System.out.println("# of results: " + numresults);
-        	
-	        for (GHRepository repo : repos) {
-	            String str = makeCloneList ? "git clone" : "";
+            // Setting page size to avoid hitting api rate limit
+            PagedSearchIterable<GHRepository> repos = gh.searchRepositories().q(query).list().withPageSize(100);
 
-	            String url = useSSHUrl ? repo.getSshUrl() : repo.getHttpTransportUrl();
-	            str += " " + url;
+            System.out.println("Search query: " + query);
+            int numresults = repos.getTotalCount();
+            System.out.println("# of results: " + numresults);
 
-	            if (showDescriptions)
-	                str += " " + repo.getDescription();
-	            else if (makeCloneList) {
-	                str += " ";
-	                if (prependSHA256)
-	                    str += sha256_32(url) + "-";
-	                str += repo.getName();
-	            }
-	            System.out.println(str);
-	        }
+            // Build an array of indexes to randomize randomize order of list of git repos to draw from
+            // We didn't shuffle the search result directly because it is taking too long to convert
+            // it into a list
+            List<Integer> range = new ArrayList<>(numresults) {{
+                for (int i = 1; i < numresults; i++)
+                    this.add(i);
+            }};
+            Collections.shuffle(range);
+            if (numresults < numGitRepos) numGitRepos = numresults;
+            range = range.subList(0, numGitRepos);
+
+            int loopIndex = 1;
+            StringBuilder gitCloneString = new StringBuilder();
+            for (GHRepository repo : repos) {
+                if (range.contains(loopIndex)) {
+                    String str = makeCloneList ? "git clone" : "";
+
+                    String url = useSSHUrl ? repo.getSshUrl() : repo.getHttpTransportUrl();
+                    str += " " + url;
+
+                    if (showDescriptions)
+                        str += " " + repo.getDescription();
+                    else if (makeCloneList) {
+                        str += " ";
+                        if (prependSHA256)
+                            str += sha256_32(url) + "-";
+                        str += repo.getName();
+                    }
+                    System.out.println(str);
+                    gitCloneString.append(str);
+                    gitCloneString.append("\n");
+                }
+                loopIndex++;
+            }
+
             // Now we have a giant string of "git clone"s
-	        // NAD: can we use Java's process builder to actually do the git cloning?
-            // NAD: the following was copied from the web and isn't yet working
-/*        	ProcessBuilder pb = new ProcessBuilder(str);
-        	pb.directory(new File(dirname));
-        	pb.inheritIO();
-        	pb.redirectErrorStream(true);
-        	try {
-        		Process process = pb.start();
-        		BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(process.getInputStream()));
-            	String line;
-            	while ((line = reader.readLine()) != null) {
-                	System.out.println(line);
-            	}
-            	reader.close();
-            	int exitVal = process.waitFor();
-            	if (exitVal != 0) {
-                	System.out.println("Abnormal Behaviour! Something bad happened.");
-            	}
-        	} catch (Exception e) {
-        		e.printStackTrace();
-        	}
-*/
-	        // write to readme github query used
-	        readmefile.write("Scraped from "+numresults+" github repos with query: "+query+"\n");
-	        return 0;
-	    } catch (Exception e) {
-	    	e.printStackTrace();
-	    	return 1;
-	    }
+            // We use Java's process builder to do the git cloning
+            ProcessBuilder pb = new ProcessBuilder("bash", "-c", String.valueOf(gitCloneString));
+            pb.directory(new File(dirname));
+            pb.inheritIO();
+            pb.redirectErrorStream(true);
+            try {
+                Process process = pb.start();
+                BufferedReader reader = new BufferedReader(
+                        new InputStreamReader(process.getInputStream()));
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    System.out.println(line);
+                }
+                reader.close();
+                int exitVal = process.waitFor();
+                if (exitVal != 0) {
+                    System.out.println("Abnormal Behaviour! Something bad happened.");
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+
+            // write to readme github query used
+            readmefile.write("Scraped from " + numGitRepos + " github repos with query: " + query + "\n");
+            return 0;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return 1;
+        }
     }
 
     static Integer GatherFromExistingModelSets(String[] dirs) {
-    	// Do not duplicate anything already in model-set directory
-    	// write to readme which directories gathered from
-	// Elias 
-    	return 0;
+        // Do not duplicate anything already in model-set directory
+        // write to readme which directories gathered from
+        // Elias
+        return 0;
     }
 
 
     public static void main(String[] args) {
 
-    	// Start a new model set directory
-    	// expects to be run in root of alloy-models-sets directory
-    	if (CreateModelSetDir() == 1) { 
-    		return;
-    	}
-    	// Gather from github
-    	if (GatherFromGithub() == 1) {
-    		System.out.println("Failed to gather models from github");
-    		return;
-    	}
-    	// Gather from existing models-sets
+        // Start a new model set directory
+        // expects to be run in root of alloy-models-sets directory
+        if (CreateModelSetDir() == 1) {
+            return;
+        }
+        // Gather from github
+        if (GatherFromGithub() == 1) {
+            System.out.println("Failed to gather models from github");
+            return;
+        }
+        // Gather from existing models-sets
     	/*
     	existing_model_sets_to_use = []
     	if GatherFromExistingModelSets(existing_model_sets) == 1 {
@@ -195,12 +220,12 @@ public class AlloyModelSetTools {
     		return;
     	}
     	*/
-    	try {
-    		readmefile.close();
-    	} catch (Exception e) {
-    		System.out.println("Failed to close readme file");
+        try {
+            readmefile.close();
+        } catch (Exception e) {
+            System.out.println("Failed to close readme file");
             return;
         }
-    	return;
+        return;
     }
 }

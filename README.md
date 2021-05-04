@@ -28,7 +28,7 @@ In the root directory, run "./gradlew build".   This results in "build/libs/allo
 
 #### Running the Scripts
 
-Run "java -jar build/libs/allow-model-sets-all.jar"
+Run "java -jar build/libs/alloy-model-sets-all.jar"
 
 This will output diagnostic information and create your new model set in "models-sets/date-time/".  Within that directory there will be an initial README.md file that shows how the set was created programmatically.  You may wish to do more filtering and add to the README.md the effects of your own (manual or otherwise) filters.
 
