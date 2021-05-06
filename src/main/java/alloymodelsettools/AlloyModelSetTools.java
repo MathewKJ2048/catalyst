@@ -30,6 +30,7 @@ import java.time.format.DateTimeFormatter;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 
 import org.kohsuke.github.*;
@@ -47,6 +48,11 @@ public class AlloyModelSetTools {
     static FileWriter readmefile;
     static String dirname;
     static int numGitRepos = 5;
+    static boolean removeNonAlloyFiles = true;
+    static boolean removeUtilModels = true;
+    static boolean removeDuplicateFiles = true;
+    static HashSet<String> alsFileNames = new HashSet<>();
+    static int numDuplicateFiles = 0;
     // stdio is used for error output
 
     static String sha256(String s) {
@@ -177,7 +183,7 @@ public class AlloyModelSetTools {
                 reader.close();
                 int exitVal = process.waitFor();
                 if (exitVal != 0) {
-                    System.out.println("Abnormal Behaviour! Something bad happened.");
+                    System.out.println("Abnormal Behaviour! Something bad happened when git cloning repositories.");
                 }
             } catch (Exception e) {
                 e.printStackTrace();
@@ -199,6 +205,81 @@ public class AlloyModelSetTools {
         return 0;
     }
 
+    public static void removeDuplicateFiles(File[] files) {
+        for (File file : files) {
+            if (file.isDirectory()) {
+                removeDuplicateFiles(file.listFiles()); // Calls same method again.
+            } else {
+                if (alsFileNames.contains(file.getName())) {
+                    numDuplicateFiles++;
+                    System.out.println("Duplicate: " + file.getPath());
+                    if (!file.delete()) {
+                        System.out.println("Abnormal Behaviour! Something bad happened when deleting duplicate files.");
+                    }
+                } else {
+                    alsFileNames.add(file.getName());
+                }
+            }
+        }
+    }
+
+    static Integer CleanUpFiles() {
+        String cleanUpCommands = "";
+        if (removeNonAlloyFiles) {
+            cleanUpCommands += "rm -rf .*\n";
+            cleanUpCommands += "find . -mindepth 2 -depth -type f ! -name '*.als' -delete\n";
+        }
+        if (removeUtilModels)
+            cleanUpCommands += "find . -depth -type f \\( -name 'boolean.als' -o -name 'graph.als' -o -name 'integer.als' -o -name 'natural.als' -o -name 'ordering.als' -o -name 'relation.als' -o -name 'seqrel.als' -o -name 'sequence.als' -o -name 'sequniv.als' -o -name 'ternary.als' -o -name 'time.als' \\) -print -delete | wc -l | tr -d ' ' | awk '{print \"Number of removed files: \"$1}'\n";
+
+        int numUtilFiles = 0;
+        ProcessBuilder pb = new ProcessBuilder("bash", "-c", cleanUpCommands);
+        pb.directory(new File(dirname));
+        pb.redirectErrorStream(true);
+        try {
+            Process process = pb.start();
+            BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(process.getInputStream()));
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.contains("Number of removed files:")) {
+                    numUtilFiles = Integer.parseInt(line.split(" ")[4]);
+                }
+                System.out.println(line);
+            }
+            reader.close();
+            int exitVal = process.waitFor();
+            if (exitVal != 0) {
+                System.out.println("Abnormal Behaviour! Something bad happened when cleaning up files.");
+                return 1;
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+            return 1;
+        }
+
+        try {
+            // write to readme github query used
+            readmefile.write("Removed " + numUtilFiles + " util files" + "\n");
+        } catch (Exception e) {
+            e.printStackTrace();
+            return 1;
+        }
+
+        if (removeDuplicateFiles) {
+            removeDuplicateFiles(new File(dirname).listFiles());
+        }
+
+        try {
+            // write to readme github query used
+            readmefile.write("Removed " + numDuplicateFiles + " duplicate files" + "\n");
+        } catch (Exception e) {
+            e.printStackTrace();
+            return 1;
+        }
+
+        return 0;
+    }
 
     public static void main(String[] args) {
 
@@ -220,6 +301,13 @@ public class AlloyModelSetTools {
     		return;
     	}
     	*/
+
+        // Remove non-Alloy files, Alloy util/library models and duplicate models
+        if (CleanUpFiles() == 1) {
+            System.out.println("Failed to remove not needed files");
+            return;
+        }
+
         try {
             readmefile.close();
         } catch (Exception e) {
