@@ -44,13 +44,18 @@ import org.apache.commons.codec.binary.Base32;
 // and how many models to find
 
 public class AlloyModelSetTools {
-
-    static FileWriter readmefile;
-    static String dirname;
-    static int numGitRepos = 5;
+    // Options set here
+    static boolean gatherFromGithub = true;
+    static int num_git_repos = 5; // -1 for downloading all github repos
+    static boolean gatherFromExistingModelSets = true;
+    static String[] existing_model_sets = {};
     static boolean removeNonAlloyFiles = true;
     static boolean removeUtilModels = true;
     static boolean removeDuplicateFiles = true;
+
+    // static variables
+    static FileWriter readmefile;
+    static String dirname;
     static HashSet<String> alsFileNames = new HashSet<>();
     static int numDuplicateFiles = 0;
     // stdio is used for error output
@@ -106,7 +111,7 @@ public class AlloyModelSetTools {
         // the query searches repositories that have files written in the Alloy language, but excludes repositories
         // that have files written in ableton, midi, music and mIRC (since they also use the .als extension).
         // the query also EXCLUDES the AlloyTools/models repository.
-        String query = "language:alloy NOT ableton NOT midi NOT music NOT mIRC -repo:AlloyTools/models";
+        String query = "language:alloy NOT ableton NOT midi NOT music NOT mIRC";
         boolean showDescriptions = false;
         boolean useSSHUrl = false;    // whether to use the SSH protocol for cloning, or HTTPS
         boolean prependSHA256 = true; // whether to prepend SHA-256 of url to folder name (to obtain unique names)
@@ -139,8 +144,9 @@ public class AlloyModelSetTools {
                     this.add(i);
             }};
             Collections.shuffle(range);
-            if (numresults < numGitRepos) numGitRepos = numresults;
-            range = range.subList(0, numGitRepos);
+            if (num_git_repos == -1 || numresults < num_git_repos)
+                num_git_repos = numresults;
+            range = range.subList(0, num_git_repos);
 
             int loopIndex = 1;
             StringBuilder gitCloneString = new StringBuilder();
@@ -190,7 +196,7 @@ public class AlloyModelSetTools {
             }
 
             // write to readme github query used
-            readmefile.write("Scraped from " + numGitRepos + " github repos with query: " + query + "\n");
+            readmefile.write("Scraped from " + num_git_repos + " github repos with query: " + query + "\n");
             return 0;
         } catch (Exception e) {
             e.printStackTrace();
@@ -205,10 +211,10 @@ public class AlloyModelSetTools {
         return 0;
     }
 
-    public static void removeDuplicateFiles(File[] files) {
+    public static void RemoveDuplicateFiles(File[] files) {
         for (File file : files) {
             if (file.isDirectory()) {
-                removeDuplicateFiles(file.listFiles()); // Calls same method again.
+                RemoveDuplicateFiles(file.listFiles()); // Calls same method again.
             } else {
                 if (alsFileNames.contains(file.getName())) {
                     numDuplicateFiles++;
@@ -226,11 +232,12 @@ public class AlloyModelSetTools {
     static Integer CleanUpFiles() {
         String cleanUpCommands = "";
         if (removeNonAlloyFiles) {
-            cleanUpCommands += "rm -rf .*\n";
+            cleanUpCommands += "rm -rf .*\n"; // remove hidden files
             cleanUpCommands += "find . -mindepth 2 -depth -type f ! -name '*.als' -delete\n";
         }
         if (removeUtilModels)
             cleanUpCommands += "find . -depth -type f \\( -name 'boolean.als' -o -name 'graph.als' -o -name 'integer.als' -o -name 'natural.als' -o -name 'ordering.als' -o -name 'relation.als' -o -name 'seqrel.als' -o -name 'sequence.als' -o -name 'sequniv.als' -o -name 'ternary.als' -o -name 'time.als' \\) -print -delete | wc -l | tr -d ' ' | awk '{print \"Number of removed files: \"$1}'\n";
+        cleanUpCommands += "find . -type d -empty -delete\n"; // remove empty folders
 
         int numUtilFiles = 0;
         ProcessBuilder pb = new ProcessBuilder("bash", "-c", cleanUpCommands);
@@ -267,7 +274,7 @@ public class AlloyModelSetTools {
         }
 
         if (removeDuplicateFiles) {
-            removeDuplicateFiles(new File(dirname).listFiles());
+            RemoveDuplicateFiles(new File(dirname).listFiles());
         }
 
         try {
@@ -288,11 +295,15 @@ public class AlloyModelSetTools {
         if (CreateModelSetDir() == 1) {
             return;
         }
-        // Gather from github
-        if (GatherFromGithub() == 1) {
-            System.out.println("Failed to gather models from github");
-            return;
+
+        if (gatherFromGithub) {
+            // Gather from github
+            if (GatherFromGithub() == 1) {
+                System.out.println("Failed to gather models from github");
+                return;
+            }
         }
+
         // Gather from existing models-sets
     	/*
     	existing_model_sets_to_use = []
@@ -302,13 +313,14 @@ public class AlloyModelSetTools {
     	}
     	*/
 
-        // Remove non-Alloy files, Alloy util/library models and duplicate models
+        // Remove non-Alloy files, Alloy util/library models and duplicate models if options set
         if (CleanUpFiles() == 1) {
             System.out.println("Failed to remove not needed files");
             return;
         }
 
         try {
+            readmefile.write(alsFileNames.size() + " .als files drawn from " + num_git_repos + " github repos." + "\n");
             readmefile.close();
         } catch (Exception e) {
             System.out.println("Failed to close readme file");
