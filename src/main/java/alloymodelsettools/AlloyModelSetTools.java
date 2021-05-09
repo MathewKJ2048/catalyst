@@ -28,6 +28,14 @@ import java.time.format.DateTimeFormatter;
 import java.time.LocalDateTime;
 import java.util.*;
 
+import edu.mit.csail.sdg.alloy4.A4Reporter;
+import edu.mit.csail.sdg.alloy4.ErrorWarning;
+import edu.mit.csail.sdg.ast.Command;
+import edu.mit.csail.sdg.ast.Module;
+import edu.mit.csail.sdg.parser.CompUtil;
+import edu.mit.csail.sdg.translator.A4Options;
+import edu.mit.csail.sdg.translator.A4Solution;
+import edu.mit.csail.sdg.translator.TranslateAlloyToKodkod;
 import org.apache.commons.io.FileUtils;
 import org.kohsuke.github.*;
 
@@ -55,14 +63,17 @@ public class AlloyModelSetTools {
     // time.als, graph.als, natural.als, relation.als, sequence.als, ternary.als
     static boolean removeUtilModels = true;
     static boolean removeDuplicateFiles = true;
+    static boolean removeDoNotParse = true;
     // You don't need to change anything after this line
 
     // static variables
     static FileWriter readmefile;
     static String dirname;
     static HashSet<String> alsFileNames = new HashSet<>();
-    static int numDuplicateFiles = 0;
     static int numFilesFromExisting = 0;
+    static int numDuplicateFiles = 0;
+    static int numDoNotParse = 0;
+    static A4Reporter rep = null;
     // stdio is used for error output
 
     static String sha256(String s) {
@@ -258,6 +269,33 @@ public class AlloyModelSetTools {
         }
     }
 
+    public static void RemoveDoNotParse(File[] files,
+                                        boolean isFromExisting) {
+        for (File file : files) {
+            if (file.isDirectory()) {
+                RemoveDoNotParse(file.listFiles(), isFromExisting);
+                // Calls  same method again.
+            } else {
+                // Parse+typecheck the model
+                System.out.println("=========== Parsing+Typechecking " + file.getPath() + " =============");
+                try {
+                    Module world = CompUtil.parseEverything_fromFile(rep, null, file.getPath());
+
+                    if (isFromExisting) numFilesFromExisting++;
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    System.out.println(file.getPath() + "do not parse");
+                    numDoNotParse++;
+                    if (!file.delete()) {
+                        System.out.println("Abnormal Behaviour! Something bad" +
+                                " happened when deleting files do not parse.");
+                    }
+                    alsFileNames.remove(file.getName());
+                }
+            }
+        }
+    }
+
     static Integer CleanUpFiles() {
         String cleanUpCommands = "";
         if (removeNonAlloyFiles) {
@@ -294,12 +332,13 @@ public class AlloyModelSetTools {
             return 1;
         }
 
-        try {
-            // write to readme github query used
-            readmefile.write("Removed " + numUtilFiles + " util files" + "\n");
-        } catch (Exception e) {
-            e.printStackTrace();
-            return 1;
+        if (removeUtilModels) {
+            try {
+                readmefile.write("Removed " + numUtilFiles + " util files" + "\n");
+            } catch (Exception e) {
+                e.printStackTrace();
+                return 1;
+            }
         }
 
         if (removeDuplicateFiles) {
@@ -312,11 +351,65 @@ public class AlloyModelSetTools {
                     RemoveDuplicateFiles(f.listFiles(), existing_model_sets_name.contains(f.getName()));
                 }
             }
+
+            try {
+                readmefile.write("Removed " + numDuplicateFiles + " duplicate files" + "\n");
+            } catch (Exception e) {
+                e.printStackTrace();
+                return 1;
+            }
         }
 
+        if (removeDoNotParse) {
+            HashSet<String> existing_model_sets_name = new HashSet<>();
+            for (String path : existing_model_sets) {
+                existing_model_sets_name.add(Paths.get(path).getFileName().toString());
+            }
+            numFilesFromExisting = 0;
+            // Alloy4 sends diagnostic messages and progress reports to the
+            // A4Reporter.
+            // By default, the A4Reporter ignores all these events (but you can
+            // extend the A4Reporter to display the event for the user)
+            rep = new A4Reporter() {
+
+                // For example, here we choose to display each "warning" by printing
+                // it to System.out
+                @Override
+                public void warning(ErrorWarning msg) {
+                    System.out.print("Relevance Warning:\n" + (msg.toString().trim()) + "\n\n");
+                    System.out.flush();
+                }
+            };
+
+            for (File f : new File(dirname).listFiles()) {
+                if (f.isDirectory()) {
+                    RemoveDoNotParse(f.listFiles(), existing_model_sets_name.contains(f.getName()));
+                }
+            }
+
+            try {
+                readmefile.write("Removed " + numDoNotParse + " files that " +
+                        "do not parse." + "\n");
+            } catch (Exception e) {
+                e.printStackTrace();
+                return 1;
+            }
+        }
+
+        // remove empty folders
+        pb = new ProcessBuilder("bash", "-c", "find . -type d -empty -delete\n");
+        pb.directory(new File(dirname));
+        pb.inheritIO();
+        pb.redirectErrorStream(true);
         try {
-            // write to readme github query used
-            readmefile.write("Removed " + numDuplicateFiles + " duplicate files" + "\n");
+            Process process = pb.start();
+            BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(process.getInputStream()));
+            int exitVal = process.waitFor();
+            if (exitVal != 0) {
+                System.out.println("Abnormal Behaviour! Something bad happened when cleaning up files.");
+                return 1;
+            }
         } catch (Exception e) {
             e.printStackTrace();
             return 1;
