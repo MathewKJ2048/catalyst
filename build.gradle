@@ -14,6 +14,7 @@ repositories {
 dependencies {
     implementation "org.kohsuke:github-api:1.127"
     implementation "commons-codec:commons-codec:1.15"
+    compile fileTree(include: ['*.jar'], dir: 'libs')
 }
 
 jar {

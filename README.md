@@ -12,6 +12,10 @@ The directory "models-sets" contains sets of Alloy models (sometimes within the 
 
 ## Building a Model Set Using the Scripts
 
+### Setup
+
+Put the alloy jar (org.alloytools.alloy/org.alloytools.alloy.dist/target/org.alloytools.alloy.dist.jar) in /libs subdirectory. You can either clone the org.alloytools.alloy repo, follow its instructions to compile it to get a jar or download a jar directly from its releases.
+
 ### Program the filters in the Script
 
 See src/main/java/alloymodeltools/alloymodeltools.java and choose the sources and filters you want to use to create a new model set.

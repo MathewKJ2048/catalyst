@@ -21,18 +21,22 @@
 
 package alloymodelsettools;
 
-import java.io.File;
-import java.io.FileWriter;
-import java.io.InputStreamReader;
-import java.io.BufferedReader;
+import java.io.*;
 
+import java.nio.file.Paths;
 import java.time.format.DateTimeFormatter;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.List;
+import java.util.*;
 
+import edu.mit.csail.sdg.alloy4.A4Reporter;
+import edu.mit.csail.sdg.alloy4.ErrorWarning;
+import edu.mit.csail.sdg.ast.Command;
+import edu.mit.csail.sdg.ast.Module;
+import edu.mit.csail.sdg.parser.CompUtil;
+import edu.mit.csail.sdg.translator.A4Options;
+import edu.mit.csail.sdg.translator.A4Solution;
+import edu.mit.csail.sdg.translator.TranslateAlloyToKodkod;
+import org.apache.commons.io.FileUtils;
 import org.kohsuke.github.*;
 
 import static org.apache.commons.codec.digest.MessageDigestAlgorithms.SHA_256;
@@ -40,24 +44,36 @@ import static org.apache.commons.codec.digest.MessageDigestAlgorithms.SHA_256;
 import org.apache.commons.codec.digest.DigestUtils;
 import org.apache.commons.codec.binary.Base32;
 
-// We should probably have a constant for the max number of repos to clone?
-// and how many models to find
-
 public class AlloyModelSetTools {
-    // Options set here
+    // Users set these options. You can choose to gather from Github
+    // repositories or from existing model sets or both.
     static boolean gatherFromGithub = true;
-    static int num_git_repos = 5; // -1 for downloading all github repos
-    static boolean gatherFromExistingModelSets = true;
+    // The max number of repos to clone, -1 for downloading all github repos
+    static int num_git_repos = 5;
+    static boolean gatherFromExistingModelSets = false;
+    // List of existing model sets directories to draw from, paths can either
+    // be relative or absolute,  relative path are expected to be relative to
+    // "alloy-model-sets/". One example: "model-sets/2021-05-07-14-22-48".
     static String[] existing_model_sets = {};
+    // Whether to remove non-Alloy files, note that hidden files will also be
+    // removed.
     static boolean removeNonAlloyFiles = true;
+    // Whether to remove Alloy utility models:
+    // boolean.als, integer.als, ordering.als, seqrel.als, sequniv.als,
+    // time.als, graph.als, natural.als, relation.als, sequence.als, ternary.als
     static boolean removeUtilModels = true;
     static boolean removeDuplicateFiles = true;
+    static boolean removeDoNotParse = true;
+    // You don't need to change anything after this line
 
     // static variables
     static FileWriter readmefile;
     static String dirname;
     static HashSet<String> alsFileNames = new HashSet<>();
+    static int numFilesFromExisting = 0;
     static int numDuplicateFiles = 0;
+    static int numDoNotParse = 0;
+    static A4Reporter rep = null;
     // stdio is used for error output
 
     static String sha256(String s) {
@@ -204,17 +220,40 @@ public class AlloyModelSetTools {
         }
     }
 
-    static Integer GatherFromExistingModelSets(String[] dirs) {
-        // Do not duplicate anything already in model-set directory
-        // write to readme which directories gathered from
-        // Elias
+    static Integer GatherFromExistingModelSets() {
+        try {
+            // write to readme which directories gathered from
+            readmefile.write("Gathered from " + existing_model_sets.length +
+                    " existing model sets directories:\n");
+            for (String dir : existing_model_sets) {
+                File srcDir = new File(dir);
+                File destDir = new File(dirname + "/" + srcDir.getName());
+
+                readmefile.write("README.md in " + dir + ":\n");
+                if (new File(dir + "/README.md").exists()) {
+                    BufferedReader in = new BufferedReader(new FileReader(new File(dir + "/README.md")));
+                    String str;
+                    while ((str = in.readLine()) != null) {
+                        readmefile.write(str + "\n");
+                    }
+                    in.close();
+                    readmefile.write("\n");
+                }
+                FileUtils.copyDirectory(srcDir, destDir);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+            return 1;
+        }
         return 0;
     }
 
-    public static void RemoveDuplicateFiles(File[] files) {
+    public static void RemoveDuplicateFiles(File[] files,
+                                            boolean isFromExisting) {
         for (File file : files) {
             if (file.isDirectory()) {
-                RemoveDuplicateFiles(file.listFiles()); // Calls same method again.
+                RemoveDuplicateFiles(file.listFiles(), isFromExisting);
+                // Calls  same method again.
             } else {
                 if (alsFileNames.contains(file.getName())) {
                     numDuplicateFiles++;
@@ -224,6 +263,34 @@ public class AlloyModelSetTools {
                     }
                 } else {
                     alsFileNames.add(file.getName());
+                    if (isFromExisting) numFilesFromExisting++;
+                }
+            }
+        }
+    }
+
+    public static void RemoveDoNotParse(File[] files,
+                                        boolean isFromExisting) {
+        for (File file : files) {
+            if (file.isDirectory()) {
+                RemoveDoNotParse(file.listFiles(), isFromExisting);
+                // Calls  same method again.
+            } else {
+                // Parse+typecheck the model
+                System.out.println("=========== Parsing+Typechecking " + file.getPath() + " =============");
+                try {
+                    Module world = CompUtil.parseEverything_fromFile(rep, null, file.getPath());
+
+                    if (isFromExisting) numFilesFromExisting++;
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    System.out.println(file.getPath() + "do not parse");
+                    numDoNotParse++;
+                    if (!file.delete()) {
+                        System.out.println("Abnormal Behaviour! Something bad" +
+                                " happened when deleting files do not parse.");
+                    }
+                    alsFileNames.remove(file.getName());
                 }
             }
         }
@@ -265,21 +332,84 @@ public class AlloyModelSetTools {
             return 1;
         }
 
-        try {
-            // write to readme github query used
-            readmefile.write("Removed " + numUtilFiles + " util files" + "\n");
-        } catch (Exception e) {
-            e.printStackTrace();
-            return 1;
+        if (removeUtilModels) {
+            try {
+                readmefile.write("Removed " + numUtilFiles + " util files" + "\n");
+            } catch (Exception e) {
+                e.printStackTrace();
+                return 1;
+            }
         }
 
         if (removeDuplicateFiles) {
-            RemoveDuplicateFiles(new File(dirname).listFiles());
+            HashSet<String> existing_model_sets_name = new HashSet<>();
+            for (String path : existing_model_sets) {
+                existing_model_sets_name.add(Paths.get(path).getFileName().toString());
+            }
+            for (File f : new File(dirname).listFiles()) {
+                if (f.isDirectory()) {
+                    RemoveDuplicateFiles(f.listFiles(), existing_model_sets_name.contains(f.getName()));
+                }
+            }
+
+            try {
+                readmefile.write("Removed " + numDuplicateFiles + " duplicate files" + "\n");
+            } catch (Exception e) {
+                e.printStackTrace();
+                return 1;
+            }
         }
 
+        if (removeDoNotParse) {
+            HashSet<String> existing_model_sets_name = new HashSet<>();
+            for (String path : existing_model_sets) {
+                existing_model_sets_name.add(Paths.get(path).getFileName().toString());
+            }
+            numFilesFromExisting = 0;
+            // Alloy4 sends diagnostic messages and progress reports to the
+            // A4Reporter.
+            // By default, the A4Reporter ignores all these events (but you can
+            // extend the A4Reporter to display the event for the user)
+            rep = new A4Reporter() {
+
+                // For example, here we choose to display each "warning" by printing
+                // it to System.out
+                @Override
+                public void warning(ErrorWarning msg) {
+                    System.out.print("Relevance Warning:\n" + (msg.toString().trim()) + "\n\n");
+                    System.out.flush();
+                }
+            };
+
+            for (File f : new File(dirname).listFiles()) {
+                if (f.isDirectory()) {
+                    RemoveDoNotParse(f.listFiles(), existing_model_sets_name.contains(f.getName()));
+                }
+            }
+
+            try {
+                readmefile.write("Removed " + numDoNotParse + " files that " +
+                        "do not parse." + "\n");
+            } catch (Exception e) {
+                e.printStackTrace();
+                return 1;
+            }
+        }
+
+        // remove empty folders
+        pb = new ProcessBuilder("bash", "-c", "find . -type d -empty -delete\n");
+        pb.directory(new File(dirname));
+        pb.inheritIO();
+        pb.redirectErrorStream(true);
         try {
-            // write to readme github query used
-            readmefile.write("Removed " + numDuplicateFiles + " duplicate files" + "\n");
+            Process process = pb.start();
+            BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(process.getInputStream()));
+            int exitVal = process.waitFor();
+            if (exitVal != 0) {
+                System.out.println("Abnormal Behaviour! Something bad happened when cleaning up files.");
+                return 1;
+            }
         } catch (Exception e) {
             e.printStackTrace();
             return 1;
@@ -305,13 +435,12 @@ public class AlloyModelSetTools {
         }
 
         // Gather from existing models-sets
-    	/*
-    	existing_model_sets_to_use = []
-    	if GatherFromExistingModelSets(existing_model_sets) == 1 {
-    		System.out.println("Failed to gather models from existing model sets")
-    		return;
-    	}
-    	*/
+        if (gatherFromExistingModelSets) {
+            if (GatherFromExistingModelSets() == 1) {
+                System.out.println("Failed to gather models from existing model sets");
+                return;
+            }
+        }
 
         // Remove non-Alloy files, Alloy util/library models and duplicate models if options set
         if (CleanUpFiles() == 1) {
@@ -320,7 +449,26 @@ public class AlloyModelSetTools {
         }
 
         try {
-            readmefile.write(alsFileNames.size() + " .als files drawn from " + num_git_repos + " github repos." + "\n");
+            String outputCount = "Total " + alsFileNames.size() + " .als " +
+                    "files.\n";
+
+            if (gatherFromGithub && gatherFromExistingModelSets) {
+                outputCount += alsFileNames.size() - numFilesFromExisting + " " +
+                        ".als files drawn from " + num_git_repos + " github " +
+                        "repos and " + numFilesFromExisting + " .als files " +
+                        "drawn from " + existing_model_sets.length + " " +
+                        "existing model set directories.";
+            } else if (gatherFromGithub) {
+                outputCount += alsFileNames.size() - numFilesFromExisting + " " +
+                        ".als files drawn from " + num_git_repos + " github " +
+                        "repos.";
+            } else if (gatherFromExistingModelSets) {
+                outputCount += numFilesFromExisting + " .als files " +
+                        "drawn from " + existing_model_sets.length + " " +
+                        "existing model set directories.";
+            }
+            readmefile.write(outputCount + "\n");
+
             readmefile.close();
         } catch (Exception e) {
             System.out.println("Failed to close readme file");
