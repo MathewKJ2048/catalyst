@@ -36,3 +36,7 @@ Run "java -jar build/libs/alloy-model-sets-all.jar"
 
 This will output diagnostic information and create your new model set in "models-sets/date-time/".  Within that directory there will be an initial README.md file that shows how the set was created programmatically.  You may wish to do more filtering and add to the README.md the effects of your own (manual or otherwise) filters.
 
+## Design Notes
+
+* we keep the hierarchy of the path when building new repositories from old ones because path information may be valuable
+* for duplicates, we compare the file name and file size, and then randomly keep one of the duplicates
