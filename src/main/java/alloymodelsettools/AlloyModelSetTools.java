@@ -24,12 +24,12 @@ package alloymodelsettools;
 import java.io.*;
 
 import java.nio.file.Paths;
+import java.time.Duration;
 import java.time.format.DateTimeFormatter;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.*;
 
-import edu.mit.csail.sdg.alloy4.A4Reporter;
-import edu.mit.csail.sdg.alloy4.ErrorWarning;
 import edu.mit.csail.sdg.ast.Command;
 import edu.mit.csail.sdg.ast.Module;
 import edu.mit.csail.sdg.parser.CompUtil;
@@ -64,16 +64,17 @@ public class AlloyModelSetTools {
     static boolean removeUtilModels = true;
     static boolean removeDuplicateFiles = true;
     static boolean removeDoNotParse = true;
+    static long maximum_time_to_run_a_command_in_seconds = 1 * 60;
     // You don't need to change anything after this line
 
     // static variables
     static FileWriter readmefile;
     static String dirname;
-    static HashSet<String> alsFileNames = new HashSet<>();
+    static HashMap<String, List<File>> alsFileNames = new HashMap<>();
+    static int numAlsFiles = 0;
     static int numFilesFromExisting = 0;
     static int numDuplicateFiles = 0;
     static int numDoNotParse = 0;
-    static A4Reporter rep = null;
     // stdio is used for error output
 
     static String sha256(String s) {
@@ -234,11 +235,11 @@ public class AlloyModelSetTools {
                     BufferedReader in = new BufferedReader(new FileReader(new File(dir + "/README.md")));
                     String str;
                     while ((str = in.readLine()) != null) {
-                        readmefile.write(str + "\n");
+                        readmefile.write("    " + str + "\n");
                     }
                     in.close();
-                    readmefile.write("\n");
                 }
+                readmefile.write("\n");
                 FileUtils.copyDirectory(srcDir, destDir);
             }
         } catch (Exception e) {
@@ -248,47 +249,112 @@ public class AlloyModelSetTools {
         return 0;
     }
 
-    public static void RemoveDuplicateFiles(File[] files,
-                                            boolean isFromExisting) {
+    public static void GetAllDuplicateFiles(File[] files) {
         for (File file : files) {
             if (file.isDirectory()) {
-                RemoveDuplicateFiles(file.listFiles(), isFromExisting);
-                // Calls  same method again.
+                GetAllDuplicateFiles(file.listFiles());
             } else {
-                if (alsFileNames.contains(file.getName())) {
-                    numDuplicateFiles++;
-                    System.out.println("Duplicate: " + file.getPath());
-                    if (!file.delete()) {
-                        System.out.println("Abnormal Behaviour! Something bad happened when deleting duplicate files.");
+                if (!alsFileNames.containsKey(file.getName())) {
+                    alsFileNames.put(file.getName(), new ArrayList<>());
+                }
+                alsFileNames.get(file.getName()).add(file);
+            }
+        }
+    }
+
+
+    public static void RemoveDuplicateFiles(String dirname) {
+        // Get all files with duplicate names
+        for (File f : new File(dirname).listFiles()) {
+            if (f.isDirectory()) {
+                GetAllDuplicateFiles(f.listFiles());
+            }
+        }
+        Random randomGenerator = new Random();
+        for (List<File> files : alsFileNames.values()) {
+            if (files.size() > 1) {
+                // Look at the file size
+                HashMap<Long, List<File>> fileSizes = new HashMap<>();
+                for (File f : files) {
+                    long file_size = f.length();
+                    if (!fileSizes.containsKey(file_size)) {
+                        fileSizes.put(file_size, new ArrayList<>());
                     }
-                } else {
-                    alsFileNames.add(file.getName());
-                    if (isFromExisting) numFilesFromExisting++;
+                    fileSizes.get(file_size).add(f);
+                }
+                for (List<File> fs : fileSizes.values()) {
+                    if (fs.size() > 1) {
+                        // Randomly select one to keep, and delete the other ones
+                        int index = randomGenerator.nextInt(fs.size());
+                        for (int i = 0; i < fs.size(); i++) {
+                            if (i != index) {
+                                numDuplicateFiles++;
+                                System.out.println("Duplicate: " + fs.get(i).getPath());
+                                if (!fs.get(i).delete()) {
+                                    System.out.println("Abnormal Behaviour! Something bad happened when deleting duplicate files.");
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
     }
 
-    public static void RemoveDoNotParse(File[] files,
-                                        boolean isFromExisting) {
+    public static void RemoveDoNotParse(File[] files) {
         for (File file : files) {
             if (file.isDirectory()) {
-                RemoveDoNotParse(file.listFiles(), isFromExisting);
+                RemoveDoNotParse(file.listFiles());
                 // Calls  same method again.
             } else {
                 // Parse+typecheck the model
                 System.out.println("=========== Parsing+Typechecking " + file.getPath() + " =============");
                 try {
-                    Module world = CompUtil.parseEverything_fromFile(rep, null, file.getPath());
+                    Module world = CompUtil.parseEverything_fromFile(null, null, file.getPath());
 
-                    if (isFromExisting) numFilesFromExisting++;
+                    // Choose some default options for how you want to execute the commands
+                    A4Options options = new A4Options();
+
+                    options.solver = A4Options.SatSolver.SAT4J;
+
+                    for (Command command : world.getAllCommands()) {
+                        ExecutorService executor = Executors.newSingleThreadExecutor();
+
+                        final Future<A4Solution> handler = executor.submit(new Callable() {
+                            @Override
+                            public A4Solution call() throws Exception {
+                                // Execute the command
+                                System.out.println("============ Command " + command + ": ============");
+                                return TranslateAlloyToKodkod.execute_command(null, world.getAllReachableSigs(), command, options);
+                            }
+                        });
+                        A4Solution ans;
+                        try {
+                            ans = handler.get(Duration.ofSeconds(maximum_time_to_run_a_command_in_seconds).toMillis(), TimeUnit.MILLISECONDS);
+                        } catch (TimeoutException e) {
+                            System.out.println("TIMEOUT");
+                            break;
+                        } catch (Exception e) {
+                            System.out.println(e);
+                            break;
+                        }
+                        executor.shutdownNow();
+                        // Print the outcome
+                        System.out.println(ans);
+                        // If satisfiable...
+                        if (ans.satisfiable()) {
+                            System.out.println("SAT");
+                            System.out.println(command);
+                        } else {
+                            System.out.println("UNSAT");
+                        }
+                    }
                 } catch (Exception e) {
                     e.printStackTrace();
                     System.out.println(file.getPath() + "do not parse");
                     numDoNotParse++;
                     if (!file.delete()) {
-                        System.out.println("Abnormal Behaviour! Something bad" +
-                                " happened when deleting files do not parse.");
+                        System.out.println("Abnormal Behaviour! Something bad happened when deleting files do not parse.");
                     }
                     alsFileNames.remove(file.getName());
                 }
@@ -342,16 +408,7 @@ public class AlloyModelSetTools {
         }
 
         if (removeDuplicateFiles) {
-            HashSet<String> existing_model_sets_name = new HashSet<>();
-            for (String path : existing_model_sets) {
-                existing_model_sets_name.add(Paths.get(path).getFileName().toString());
-            }
-            for (File f : new File(dirname).listFiles()) {
-                if (f.isDirectory()) {
-                    RemoveDuplicateFiles(f.listFiles(), existing_model_sets_name.contains(f.getName()));
-                }
-            }
-
+            RemoveDuplicateFiles(dirname);
             try {
                 readmefile.write("Removed " + numDuplicateFiles + " duplicate files" + "\n");
             } catch (Exception e) {
@@ -361,29 +418,9 @@ public class AlloyModelSetTools {
         }
 
         if (removeDoNotParse) {
-            HashSet<String> existing_model_sets_name = new HashSet<>();
-            for (String path : existing_model_sets) {
-                existing_model_sets_name.add(Paths.get(path).getFileName().toString());
-            }
-            numFilesFromExisting = 0;
-            // Alloy4 sends diagnostic messages and progress reports to the
-            // A4Reporter.
-            // By default, the A4Reporter ignores all these events (but you can
-            // extend the A4Reporter to display the event for the user)
-            rep = new A4Reporter() {
-
-                // For example, here we choose to display each "warning" by printing
-                // it to System.out
-                @Override
-                public void warning(ErrorWarning msg) {
-                    System.out.print("Relevance Warning:\n" + (msg.toString().trim()) + "\n\n");
-                    System.out.flush();
-                }
-            };
-
             for (File f : new File(dirname).listFiles()) {
                 if (f.isDirectory()) {
-                    RemoveDoNotParse(f.listFiles(), existing_model_sets_name.contains(f.getName()));
+                    RemoveDoNotParse(f.listFiles());
                 }
             }
 
@@ -418,6 +455,17 @@ public class AlloyModelSetTools {
         return 0;
     }
 
+    static void CountFiles(File[] files, boolean isFromExisting) {
+        for (File file : files) {
+            if (file.isDirectory()) {
+                CountFiles(file.listFiles(), isFromExisting);
+            } else {
+                numAlsFiles++;
+                if (isFromExisting) numFilesFromExisting++;
+            }
+        }
+    }
+
     public static void main(String[] args) {
 
         // Start a new model set directory
@@ -448,18 +496,28 @@ public class AlloyModelSetTools {
             return;
         }
 
+        HashSet<String> existing_model_sets_name = new HashSet<>();
+        for (String path : existing_model_sets) {
+            existing_model_sets_name.add(Paths.get(path).getFileName().toString());
+        }
+        for (File f : new File(dirname).listFiles()) {
+            if (f.isDirectory()) {
+                CountFiles(f.listFiles(), existing_model_sets_name.contains(f.getName()));
+            }
+        }
+
         try {
-            String outputCount = "Total " + alsFileNames.size() + " .als " +
+            String outputCount = "Total " + numAlsFiles + " .als " +
                     "files.\n";
 
             if (gatherFromGithub && gatherFromExistingModelSets) {
-                outputCount += alsFileNames.size() - numFilesFromExisting + " " +
+                outputCount += numAlsFiles - numFilesFromExisting + " " +
                         ".als files drawn from " + num_git_repos + " github " +
                         "repos and " + numFilesFromExisting + " .als files " +
                         "drawn from " + existing_model_sets.length + " " +
                         "existing model set directories.";
             } else if (gatherFromGithub) {
-                outputCount += alsFileNames.size() - numFilesFromExisting + " " +
+                outputCount += numAlsFiles - numFilesFromExisting + " " +
                         ".als files drawn from " + num_git_repos + " github " +
                         "repos.";
             } else if (gatherFromExistingModelSets) {
