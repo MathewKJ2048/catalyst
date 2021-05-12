@@ -24,12 +24,12 @@ package alloymodelsettools;
 import java.io.*;
 
 import java.nio.file.Paths;
+import java.time.Duration;
 import java.time.format.DateTimeFormatter;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.*;
 
-import edu.mit.csail.sdg.alloy4.A4Reporter;
-import edu.mit.csail.sdg.alloy4.ErrorWarning;
 import edu.mit.csail.sdg.ast.Command;
 import edu.mit.csail.sdg.ast.Module;
 import edu.mit.csail.sdg.parser.CompUtil;
@@ -64,6 +64,7 @@ public class AlloyModelSetTools {
     static boolean removeUtilModels = true;
     static boolean removeDuplicateFiles = true;
     static boolean removeDoNotParse = true;
+    static long maximum_time_to_run_a_command_in_seconds = 1 * 60;
     // You don't need to change anything after this line
 
     // static variables
@@ -74,7 +75,6 @@ public class AlloyModelSetTools {
     static int numFilesFromExisting = 0;
     static int numDuplicateFiles = 0;
     static int numDoNotParse = 0;
-    static A4Reporter rep = null;
     // stdio is used for error output
 
     static String sha256(String s) {
@@ -310,8 +310,45 @@ public class AlloyModelSetTools {
                 // Parse+typecheck the model
                 System.out.println("=========== Parsing+Typechecking " + file.getPath() + " =============");
                 try {
-                    Module world = CompUtil.parseEverything_fromFile(rep, null, file.getPath());
+                    Module world = CompUtil.parseEverything_fromFile(null, null, file.getPath());
 
+                    // Choose some default options for how you want to execute the commands
+                    A4Options options = new A4Options();
+
+                    options.solver = A4Options.SatSolver.SAT4J;
+
+                    for (Command command : world.getAllCommands()) {
+                        ExecutorService executor = Executors.newSingleThreadExecutor();
+
+                        final Future<A4Solution> handler = executor.submit(new Callable() {
+                            @Override
+                            public A4Solution call() throws Exception {
+                                // Execute the command
+                                System.out.println("============ Command " + command + ": ============");
+                                return TranslateAlloyToKodkod.execute_command(null, world.getAllReachableSigs(), command, options);
+                            }
+                        });
+                        A4Solution ans;
+                        try {
+                            ans = handler.get(Duration.ofSeconds(maximum_time_to_run_a_command_in_seconds).toMillis(), TimeUnit.MILLISECONDS);
+                        } catch (TimeoutException e) {
+                            System.out.println("TIMEOUT");
+                            break;
+                        } catch (Exception e) {
+                            System.out.println(e);
+                            break;
+                        }
+                        executor.shutdownNow();
+                        // Print the outcome
+                        System.out.println(ans);
+                        // If satisfiable...
+                        if (ans.satisfiable()) {
+                            System.out.println("SAT");
+                            System.out.println(command);
+                        } else {
+                            System.out.println("UNSAT");
+                        }
+                    }
                 } catch (Exception e) {
                     e.printStackTrace();
                     System.out.println(file.getPath() + "do not parse");
@@ -381,21 +418,6 @@ public class AlloyModelSetTools {
         }
 
         if (removeDoNotParse) {
-            // Alloy4 sends diagnostic messages and progress reports to the
-            // A4Reporter.
-            // By default, the A4Reporter ignores all these events (but you can
-            // extend the A4Reporter to display the event for the user)
-            rep = new A4Reporter() {
-
-                // For example, here we choose to display each "warning" by printing
-                // it to System.out
-                @Override
-                public void warning(ErrorWarning msg) {
-                    System.out.print("Relevance Warning:\n" + (msg.toString().trim()) + "\n\n");
-                    System.out.flush();
-                }
-            };
-
             for (File f : new File(dirname).listFiles()) {
                 if (f.isDirectory()) {
                     RemoveDoNotParse(f.listFiles());
