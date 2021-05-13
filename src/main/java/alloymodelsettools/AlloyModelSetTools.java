@@ -23,19 +23,16 @@ package alloymodelsettools;
 
 import java.io.*;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.time.Duration;
+import java.nio.file.StandardCopyOption;
 import java.time.format.DateTimeFormatter;
 import java.time.LocalDateTime;
 import java.util.*;
-import java.util.concurrent.*;
 
-import edu.mit.csail.sdg.ast.Command;
 import edu.mit.csail.sdg.ast.Module;
 import edu.mit.csail.sdg.parser.CompUtil;
-import edu.mit.csail.sdg.translator.A4Options;
-import edu.mit.csail.sdg.translator.A4Solution;
-import edu.mit.csail.sdg.translator.TranslateAlloyToKodkod;
 import org.apache.commons.io.FileUtils;
 import org.kohsuke.github.*;
 
@@ -64,6 +61,7 @@ public class AlloyModelSetTools {
     static boolean removeUtilModels = true;
     static boolean removeDuplicateFiles = true;
     static boolean removeDoNotParse = true;
+    static boolean extractSatUnsatModels = true;
     static long maximum_time_to_run_a_command_in_seconds = 1 * 60;
     // You don't need to change anything after this line
 
@@ -312,43 +310,6 @@ public class AlloyModelSetTools {
                 try {
                     Module world = CompUtil.parseEverything_fromFile(null, null, file.getPath());
 
-                    // Choose some default options for how you want to execute the commands
-                    A4Options options = new A4Options();
-
-                    options.solver = A4Options.SatSolver.SAT4J;
-
-                    for (Command command : world.getAllCommands()) {
-                        ExecutorService executor = Executors.newSingleThreadExecutor();
-
-                        final Future<A4Solution> handler = executor.submit(new Callable() {
-                            @Override
-                            public A4Solution call() throws Exception {
-                                // Execute the command
-                                System.out.println("============ Command " + command + ": ============");
-                                return TranslateAlloyToKodkod.execute_command(null, world.getAllReachableSigs(), command, options);
-                            }
-                        });
-                        A4Solution ans;
-                        try {
-                            ans = handler.get(Duration.ofSeconds(maximum_time_to_run_a_command_in_seconds).toMillis(), TimeUnit.MILLISECONDS);
-                        } catch (TimeoutException e) {
-                            System.out.println("TIMEOUT");
-                            break;
-                        } catch (Exception e) {
-                            System.out.println(e);
-                            break;
-                        }
-                        executor.shutdownNow();
-                        // Print the outcome
-                        System.out.println(ans);
-                        // If satisfiable...
-                        if (ans.satisfiable()) {
-                            System.out.println("SAT");
-                            System.out.println(command);
-                        } else {
-                            System.out.println("UNSAT");
-                        }
-                    }
                 } catch (Exception e) {
                     e.printStackTrace();
                     System.out.println(file.getPath() + "do not parse");
@@ -466,6 +427,55 @@ public class AlloyModelSetTools {
         }
     }
 
+    // https://stackoverflow.com/questions/636367/executing-a-java-application-in-a-separate-process
+    public static final class JavaProcess {
+
+        private JavaProcess() {
+        }
+
+        public static int exec(Class klass, List<String> args) throws IOException,
+                InterruptedException {
+            String javaHome = System.getProperty("java.home");
+            String javaBin = javaHome +
+                    File.separator + "bin" +
+                    File.separator + "java";
+            String classpath = System.getProperty("java.class.path");
+            String className = klass.getName();
+
+            List<String> command = new LinkedList<String>();
+            command.add(javaBin);
+            command.add("-cp");
+            command.add(classpath);
+            command.add(className);
+            if (args != null) {
+                command.addAll(args);
+            }
+
+            ProcessBuilder builder = new ProcessBuilder(command);
+
+            Process process = builder.inheritIO().start();
+            process.waitFor();
+            return process.exitValue();
+        }
+    }
+
+    static Integer ExtractSatUnsatModels(File[] files) {
+        for (File file : files) {
+            if (file.isDirectory()) {
+                ExtractSatUnsatModels(file.listFiles());
+            } else {
+                try {
+                    JavaProcess.exec(RunCommandsInOneFile.class,
+                            Arrays.asList(file.getPath(), dirname));
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    return 1;
+                }
+            }
+        }
+        return 0;
+    }
+
     public static void main(String[] args) {
 
         // Start a new model set directory
@@ -530,8 +540,57 @@ public class AlloyModelSetTools {
             readmefile.close();
         } catch (Exception e) {
             System.out.println("Failed to close readme file");
-            return;
         }
-        return;
+
+        // Extract sat and unsat models
+        if (extractSatUnsatModels) {
+            // Create SAT/UNSAT directories
+            try {
+                readmefile.close();
+                Path source = Path.of(dirname + "/README.md");
+                Path target = Path.of(dirname + "-SAT/README.md");
+                Files.createDirectories(target.getParent());
+                Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING);
+                target = Path.of(dirname + "-UNSAT/README.md");
+                Files.createDirectories(target.getParent());
+                Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+
+            // Extract models
+            for (File f : new File(dirname).listFiles()) {
+                if (f.isDirectory()) {
+                    if (ExtractSatUnsatModels(f.listFiles()) == 1) {
+                        System.out.println("Abnormal Behaviour! Something bad happened when extracting SAT and UNSAT models.");
+                    }
+                }
+            }
+
+            // Delete the original model-set directory and print out models count
+            try {
+                FileUtils.deleteDirectory(new File(dirname));
+                numAlsFiles = 0;
+                for (File f : new File(dirname + "-SAT").listFiles()) {
+                    if (f.isDirectory()) {
+                        CountFiles(f.listFiles(), false);
+                    }
+                }
+                readmefile = new FileWriter(dirname + "-SAT/README.md", true);
+                readmefile.write("\nExtracted " + numAlsFiles + " SAT models.\n");
+                readmefile.close();
+                numAlsFiles = 0;
+                for (File f : new File(dirname + "-UNSAT").listFiles()) {
+                    if (f.isDirectory()) {
+                        CountFiles(f.listFiles(), false);
+                    }
+                }
+                readmefile = new FileWriter(dirname + "-UNSAT/README.md", true);
+                readmefile.write("\nExtracted " + numAlsFiles + " UNSAT models.\n");
+                readmefile.close();
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
     }
 }
