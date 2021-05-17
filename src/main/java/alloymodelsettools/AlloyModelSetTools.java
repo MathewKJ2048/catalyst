@@ -155,7 +155,7 @@ public class AlloyModelSetTools {
             // We didn't shuffle the search result directly because it is taking too long to convert
             // it into a list
             List<Integer> range = new ArrayList<>(numresults) {{
-                for (int i = 1; i < numresults; i++)
+                for (int i = 1; i < numresults + 1; i++)
                     this.add(i);
             }};
             Collections.shuffle(range);
