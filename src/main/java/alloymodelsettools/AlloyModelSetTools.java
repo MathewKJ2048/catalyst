@@ -31,8 +31,11 @@ import java.time.format.DateTimeFormatter;
 import java.time.LocalDateTime;
 import java.util.*;
 
+import edu.mit.csail.sdg.ast.Command;
+import edu.mit.csail.sdg.ast.CommandScope;
 import edu.mit.csail.sdg.ast.Module;
 import edu.mit.csail.sdg.parser.CompUtil;
+import edu.mit.csail.sdg.translator.A4Options;
 import org.apache.commons.io.FileUtils;
 import org.kohsuke.github.*;
 
@@ -62,7 +65,10 @@ public class AlloyModelSetTools {
     static boolean removeDuplicateFiles = true;
     static boolean removeDoNotParse = true;
     static boolean extractSatUnsatModels = true;
-    static long maximum_time_to_run_a_command_in_seconds = 1 * 60;
+    static long lower_bound_of_time_range_in_seconds = 1;
+    static long higher_bound_of_time_range_in_seconds = 3;
+    static int min_scope_to_stop_looking_for_scope = 1;
+    static int max_scope_to_stop_looking_for_scope = 100;
     // You don't need to change anything after this line
 
     // static variables
@@ -312,7 +318,7 @@ public class AlloyModelSetTools {
 
                 } catch (Exception e) {
                     e.printStackTrace();
-                    System.out.println(file.getPath() + "do not parse");
+                    System.out.println(file.getPath() + " do not parse");
                     numDoNotParse++;
                     if (!file.delete()) {
                         System.out.println("Abnormal Behaviour! Something bad happened when deleting files do not parse.");
@@ -433,7 +439,7 @@ public class AlloyModelSetTools {
         private JavaProcess() {
         }
 
-        public static int exec(Class klass, List<String> args) throws IOException,
+        public static Process getJavaProcess(Class klass, List<String> args) throws IOException,
                 InterruptedException {
             String javaHome = System.getProperty("java.home");
             String javaBin = javaHome +
@@ -452,11 +458,101 @@ public class AlloyModelSetTools {
             }
 
             ProcessBuilder builder = new ProcessBuilder(command);
-
-            Process process = builder.inheritIO().start();
-            process.waitFor();
-            return process.exitValue();
+            // Comment out this line to get more information: what exception is thrown
+            // builder.inheritIO();
+            return builder.start();
         }
+    }
+
+    // There are 5 possible outcomes of running a command in an Alloy model
+    // SUCCESS: It executes successfully with execution time falls in the desired time range
+    //          [lower_bound_of_time_range_in_seconds, higher_bound_of_time_range_in_seconds]
+    // TOOSHORT: It executes successfully but the execution time is shorter than lower_bound_of_time_range_in_seconds
+    // TIMEOUT: It times out in higher_bound_of_time_range_in_seconds seconds.
+    // EXCEPTION: It throws an exception when executing the command.
+    // UNKNOWN: Unknown error has occurred. It should never reach here.
+    public enum Status {
+        SUCCESS, TOOSHORT, TIMEOUT, EXCEPTION, UNKNOWN
+    }
+
+    // Run the i-th command in the als file specified with the filePath, with
+    // scope set to overallScope. If overallScope is -1, runs the original
+    // command. Returns enum status as explained above.
+    public static Status runCommand(String filePath, int i,
+                                    int overallScope) {
+        try {
+            Process process = JavaProcess.getJavaProcess(RunCommand.class,
+                    Arrays.asList(filePath, String.valueOf(i), String.valueOf(overallScope)));
+            BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
+            String line;
+            long executionTime = higher_bound_of_time_range_in_seconds;
+            while ((line = reader.readLine()) != null) {
+                if (line.contains("Execution time(ns)")) {
+                    executionTime = Long.parseLong(line.split(": ")[1]);
+                }
+                System.out.println(line);
+            }
+            int returnValue = process.waitFor();
+            if (returnValue == 0) {
+                System.out.println("Java Process: Alright!");
+                if (executionTime >= lower_bound_of_time_range_in_seconds * 1000000000) {
+                    return Status.SUCCESS;
+                } else {
+                    System.out.println("Takes too short!");
+                    return Status.TOOSHORT;
+                }
+            } else if (returnValue == 1) {
+                System.out.println("Java Process: Timeout!");
+                System.out.println("Takes too long!");
+                return Status.TIMEOUT;
+            } else if (returnValue == 2) {
+                System.out.println("Java Process: Exception thrown!");
+                return Status.EXCEPTION;
+            } else {
+                System.out.println("Java Process: Unknown state!");
+                return Status.UNKNOWN;
+            }
+        } catch (Exception e) {
+            System.out.println("Java Process: Unknown state!");
+            e.printStackTrace();
+            return Status.UNKNOWN;
+        }
+    }
+
+    // Returns one scope in range [min_scope, max_scope] whose runtime of the
+    // i-th command in that als file falls in the desired time range.
+    // -1 if we cannot find anything
+    static Integer binarySearch(String als_file_path, int which_command,
+                                int min_scope, int max_scope) {
+        if (max_scope >= min_scope) {
+            int mid_scope = min_scope + (max_scope - min_scope) / 2;
+
+            Status exitStatus = runCommand(als_file_path, which_command, mid_scope);
+            // If mid_scope is what we want
+            if (exitStatus == Status.SUCCESS)
+                return mid_scope;
+
+            // If mid_scope is takiRng too short, then it can only be present
+            // in smaller scopes
+            if (exitStatus == Status.TIMEOUT)
+                return binarySearch(als_file_path, which_command, min_scope, mid_scope - 1);
+
+            if (exitStatus == Status.EXCEPTION || exitStatus == Status.UNKNOWN) {
+                // TODO: Not sure what to do
+                System.out.println("Exception or unknown error thrown when doing binary search with scope " + mid_scope);
+                return -1;
+            }
+
+            // Else we will search for larger scopes
+            return binarySearch(als_file_path, which_command, mid_scope + 1, max_scope);
+        }
+
+        // We reach here when no scope in the range have desired execution time
+        return -1;
+    }
+
+    static String successMessage(int i, int scope) {
+        return "Success for the " + i + "-th command with overall scope " + scope;
     }
 
     static Integer ExtractSatUnsatModels(File[] files) {
@@ -465,8 +561,102 @@ public class AlloyModelSetTools {
                 ExtractSatUnsatModels(file.listFiles());
             } else {
                 try {
-                    JavaProcess.exec(RunCommandsInOneFile.class,
-                            Arrays.asList(file.getPath(), dirname));
+                    Module world = CompUtil.parseEverything_fromFile(null, null, file.getPath());
+
+                    // Choose some default options for how you want to execute the commands
+                    A4Options options = new A4Options();
+
+                    options.solver = A4Options.SatSolver.SAT4J;
+
+                    for (int i = 0; i < world.getAllCommands().size(); i++) {
+                        Command command = world.getAllCommands().get(i);
+                        // If we find a cmd that has startingscope!=endingscope, then let’s not include this cmd in our tests
+                        boolean containsGrowingSig = false;
+                        for (CommandScope cs : command.scope) {
+                            if (cs.startingScope != cs.endingScope) {
+                                System.out.println("Growing sig detected! startingScope != endingScope for command: " + command);
+                                containsGrowingSig = true;
+                                break;
+                            }
+                        }
+                        if (containsGrowingSig) continue;
+                        switch (runCommand(file.getPath(), i, -1)) {
+                            case SUCCESS:
+                                System.out.println("Success for the " + i + "-th command! Print out the file next!");
+                                break;
+                            case TOOSHORT:
+                                if (command.overall == -1) {
+                                    // Try the maximum scope first, if it is still too short, do nothing.
+                                    if (runCommand(file.getPath(), i, max_scope_to_stop_looking_for_scope) != Status.TOOSHORT) {
+                                        binarySearch(file.getPath(), i, 4, max_scope_to_stop_looking_for_scope);
+                                    } else {
+                                        System.out.println("Cannot find scope under specified max scope for the " + i +
+                                                "-th command!");
+                                    }
+                                } else {
+                                    // drop all individual scopes and exact scopes, run this command again
+                                    int scope;
+                                    switch (runCommand(file.getPath(), i, command.overall)) {
+                                        case SUCCESS:
+                                            System.out.println(successMessage(i, command.overall));
+                                            break;
+                                        case TOOSHORT:
+                                            // Try the maximum scope first, if it is still too short, do nothing.
+                                            if (runCommand(file.getPath(), i, max_scope_to_stop_looking_for_scope) != Status.TOOSHORT) {
+                                                scope = binarySearch(file.getPath(), i, command.overall + 1, max_scope_to_stop_looking_for_scope);
+                                                System.out.println(scope == -1 ? "Scope not found" : successMessage(i, scope));
+                                            } else {
+                                                System.out.println("Cannot find scope under specified max scope for the " + i + "-th command!");
+                                            }
+                                            break;
+                                        case TIMEOUT:
+                                            scope = binarySearch(file.getPath(), i, min_scope_to_stop_looking_for_scope, command.overall - 1);
+                                            System.out.println(scope == -1 ? "Scope not found" : successMessage(i, scope));
+                                            break;
+                                        case EXCEPTION:
+                                            System.out.println("Exception thrown!");
+                                            break;
+                                        case UNKNOWN:
+                                            System.out.println("Unknown Error! The code should never reach here!");
+                                            break;
+                                    }
+                                }
+                                break;
+                            case TIMEOUT:
+                                if (command.overall == -1) {
+                                    binarySearch(file.getPath(), i, min_scope_to_stop_looking_for_scope, 2);
+                                } else {
+                                    // drop all individual scopes and exact scopes, run this command again
+                                    int scope;
+                                    switch (runCommand(file.getPath(), i, command.overall)) {
+                                        case SUCCESS:
+                                            System.out.println(successMessage(i, command.overall));
+                                            break;
+                                        case TOOSHORT:
+                                            scope = binarySearch(file.getPath(), i, command.overall + 1, max_scope_to_stop_looking_for_scope);
+                                            System.out.println(scope == -1 ? "Scope not found" : successMessage(i, scope));
+                                            break;
+                                        case TIMEOUT:
+                                            scope = binarySearch(file.getPath(), i, min_scope_to_stop_looking_for_scope, command.overall - 1);
+                                            System.out.println(scope == -1 ? "Scope not found" : successMessage(i, scope));
+                                            break;
+                                        case EXCEPTION:
+                                            System.out.println("Exception thrown!");
+                                            break;
+                                        case UNKNOWN:
+                                            System.out.println("Unknown Error! The code should never reach here!");
+                                            break;
+                                    }
+                                }
+                                break;
+                            case EXCEPTION:
+                                System.out.println("Exception thrown!");
+                                break;
+                            case UNKNOWN:
+                                System.out.println("Unknown Error! The code should never reach here!");
+                                break;
+                        }
+                    }
                 } catch (Exception e) {
                     e.printStackTrace();
                     return 1;
