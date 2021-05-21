@@ -1,6 +1,6 @@
 # Platinum Models
 
-This directory contains Alloy models used for the evaluation of Platinum, "an extension of the Alloy Analyzer that supports efficient analysis of evolving Alloy specifications, by recognizing opportunities for constraint reduction and reuse of previously identified constraint solutions "[1]. Some of these models have been generated using the mutation engine MuAlloy [2] and thus could differ from models created by real users.
+This directory contains Alloy models used for the evaluation of Platinum, "an extension of the Alloy Analyzer that supports efficient analysis of evolving Alloy specifications, by recognizing opportunities for constraint reduction and reuse of previously identified constraint solutions" [1]. Some of these models have been generated using the mutation engine MuAlloy [2] and thus could differ from models created by real users.
 
 
 
