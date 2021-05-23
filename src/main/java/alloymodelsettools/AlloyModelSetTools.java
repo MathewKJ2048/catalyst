@@ -23,20 +23,25 @@ package alloymodelsettools;
 
 import java.io.*;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
+import java.nio.file.*;
 import java.time.format.DateTimeFormatter;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.logging.FileHandler;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import java.util.logging.SimpleFormatter;
+
+import org.apache.commons.csv.CSVFormat;
+import org.apache.commons.csv.CSVPrinter;
+import oshi.SystemInfo;
+import oshi.hardware.HardwareAbstractionLayer;
 
 import edu.mit.csail.sdg.ast.Command;
 import edu.mit.csail.sdg.ast.CommandScope;
 import edu.mit.csail.sdg.ast.Module;
 import edu.mit.csail.sdg.parser.CompUtil;
 import edu.mit.csail.sdg.translator.A4Options;
-import org.apache.commons.io.FileUtils;
 import org.kohsuke.github.*;
 
 import static org.apache.commons.codec.digest.MessageDigestAlgorithms.SHA_256;
@@ -65,10 +70,12 @@ public class AlloyModelSetTools {
     static boolean removeDuplicateFiles = true;
     static boolean removeDoNotParse = true;
     static boolean extractSatUnsatModels = true;
-    static long lower_bound_of_time_range_in_seconds = 1;
-    static long higher_bound_of_time_range_in_seconds = 3;
-    static int min_scope_to_stop_looking_for_scope = 1;
-    static int max_scope_to_stop_looking_for_scope = 100;
+    static long lower_bound_of_time_range_in_seconds = 2 * 60;
+    static long higher_bound_of_time_range_in_seconds = 15 * 60;
+    // min scope to stop looking for scope
+    static int min_scope = 1;
+    // max scope to stop looking for scope
+    static int max_scope = 200;
     // You don't need to change anything after this line
 
     // static variables
@@ -79,6 +86,11 @@ public class AlloyModelSetTools {
     static int numFilesFromExisting = 0;
     static int numDuplicateFiles = 0;
     static int numDoNotParse = 0;
+    static Logger logger;
+    static CSVPrinter csvPrinter;
+    static Result lastResult;
+    static List<Command> satCommands = new ArrayList<>();
+    static List<Command> unsatCommands = new ArrayList<>();
     // stdio is used for error output
 
     static String sha256(String s) {
@@ -109,6 +121,17 @@ public class AlloyModelSetTools {
     // filter: ones that have transitive closure or other syntactic features (KT has code for this)
     // filter: models that are SAT/UNSAT in kodkod
 
+    public static String getSystemInfo() {
+        SystemInfo systemInfo = new SystemInfo();
+        HardwareAbstractionLayer hardware = systemInfo.getHardware();
+
+        String s = "This program is running on the following platform:\n";
+        s += "Operating System: " + systemInfo.getOperatingSystem().toString() + " : " + System.getProperty("os.arch") + "\n";
+        s += "CPU: " + hardware.getProcessor().getProcessorIdentifier().getName() + "\n";
+        s += "Memory: " + hardware.getMemory().toString() + "\n";
+        return s;
+    }
+
     static Integer CreateModelSetDir() {
         try {
             DateTimeFormatter dtf = DateTimeFormatter.ofPattern("yyyy-MM-dd-HH-mm-ss");
@@ -120,9 +143,21 @@ public class AlloyModelSetTools {
             f.getParentFile().mkdirs();
             readmefile = new FileWriter(readmefilename);
             readmefile.write("Model set created: " + dirname + "\n");
+
+            // Set up logger
+            logger = Logger.getLogger("MyLog");
+            FileHandler fh;
+            // Configure the logger with handler and formatter
+            fh = new FileHandler(dirname + "/log.txt", true);
+            logger.addHandler(fh);
+            System.setProperty("java.util.logging.SimpleFormatter.format", "%1$tc %2$s%n%4$s: %5$s%6$s%n");
+            SimpleFormatter formatter = new SimpleFormatter();
+            fh.setFormatter(formatter);
+            // Print out $machine info
+            logger.info(getSystemInfo());
             return 0;
         } catch (Exception e) {
-            System.out.println("An error occurred creating the model set directory and/or README.md file");
+            logger.warning("An error occurred creating the model set directory and/or setting up the logger.");
             return 1;
         }
     }
@@ -145,22 +180,22 @@ public class AlloyModelSetTools {
         try {
             gh = GitHub.connect();
             if (gh == null) {
-                System.out.println("Connection to GitHub failed");
+                logger.warning("Connection to GitHub failed");
                 return 1;
             }
-            System.out.println("Connected to GitHub");
+            logger.info("Connected to GitHub");
 
             // Setting page size to avoid hitting api rate limit
             PagedSearchIterable<GHRepository> repos = gh.searchRepositories().q(query).list().withPageSize(100);
 
-            System.out.println("Search query: " + query);
+            logger.info("Search query: " + query);
             int numresults = repos.getTotalCount();
-            System.out.println("# of results: " + numresults);
+            logger.info("# of results: " + numresults);
 
             // Build an array of indexes to randomize randomize order of list of git repos to draw from
             // We didn't shuffle the search result directly because it is taking too long to convert
             // it into a list
-            List<Integer> range = new ArrayList<>(numresults) {{
+            List<Integer> range = new ArrayList<Integer>(numresults) {{
                 for (int i = 1; i < numresults + 1; i++)
                     this.add(i);
             }};
@@ -186,7 +221,7 @@ public class AlloyModelSetTools {
                             str += sha256_32(url) + "-";
                         str += repo.getName();
                     }
-                    System.out.println(str);
+                    logger.info(str);
                     gitCloneString.append(str);
                     gitCloneString.append("\n");
                 }
@@ -205,22 +240,22 @@ public class AlloyModelSetTools {
                         new InputStreamReader(process.getInputStream()));
                 String line;
                 while ((line = reader.readLine()) != null) {
-                    System.out.println(line);
+                    logger.info(line);
                 }
                 reader.close();
                 int exitVal = process.waitFor();
                 if (exitVal != 0) {
-                    System.out.println("Abnormal Behaviour! Something bad happened when git cloning repositories.");
+                    logger.warning("Abnormal Behaviour! Something bad happened when git cloning repositories.");
                 }
             } catch (Exception e) {
-                e.printStackTrace();
+                logger.log(Level.SEVERE, e.getMessage(), e);
             }
 
             // write to readme github query used
             readmefile.write("Scraped from " + num_git_repos + " github repos with query: " + query + "\n");
             return 0;
         } catch (Exception e) {
-            e.printStackTrace();
+            logger.log(Level.SEVERE, e.getMessage(), e);
             return 1;
         }
     }
@@ -244,10 +279,28 @@ public class AlloyModelSetTools {
                     in.close();
                 }
                 readmefile.write("\n");
-                FileUtils.copyDirectory(srcDir, destDir);
+
+                // Copy directory contents
+                ProcessBuilder pb = new ProcessBuilder("bash", "-c",
+                        "cp -r " + Paths.get(dirname).relativize(srcDir.toPath()) + " "
+                                + Paths.get(dirname).relativize(destDir.toPath()));
+                pb.directory(new File(dirname));
+                pb.inheritIO();
+                pb.redirectErrorStream(true);
+                try {
+                    Process process = pb.start();
+                    int exitVal = process.waitFor();
+                    if (exitVal != 0) {
+                        logger.warning("Abnormal Behaviour! Something bad happened when cleaning up files.");
+                        return 1;
+                    }
+                } catch (Exception e) {
+                    logger.log(Level.SEVERE, e.getMessage(), e);
+                    return 1;
+                }
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            logger.log(Level.SEVERE, e.getMessage(), e);
             return 1;
         }
         return 0;
@@ -293,9 +346,9 @@ public class AlloyModelSetTools {
                         for (int i = 0; i < fs.size(); i++) {
                             if (i != index) {
                                 numDuplicateFiles++;
-                                System.out.println("Duplicate: " + fs.get(i).getPath());
+                                logger.info("Duplicate: " + fs.get(i).getPath());
                                 if (!fs.get(i).delete()) {
-                                    System.out.println("Abnormal Behaviour! Something bad happened when deleting duplicate files.");
+                                    logger.warning("Abnormal Behaviour! Something bad happened when deleting duplicate files.");
                                 }
                             }
                         }
@@ -312,16 +365,16 @@ public class AlloyModelSetTools {
                 // Calls  same method again.
             } else {
                 // Parse+typecheck the model
-                System.out.println("=========== Parsing+Typechecking " + file.getPath() + " =============");
+                logger.info("=========== Parsing+Typechecking " + file.getPath() + " =============");
                 try {
                     Module world = CompUtil.parseEverything_fromFile(null, null, file.getPath());
 
                 } catch (Exception e) {
-                    e.printStackTrace();
-                    System.out.println(file.getPath() + " do not parse");
+                    logger.log(Level.INFO, e.getMessage(), e);
+                    logger.info(file.getPath() + " do not parse");
                     numDoNotParse++;
                     if (!file.delete()) {
-                        System.out.println("Abnormal Behaviour! Something bad happened when deleting files do not parse.");
+                        logger.warning("Abnormal Behaviour! Something bad happened when deleting files do not parse.");
                     }
                     alsFileNames.remove(file.getName());
                 }
@@ -352,16 +405,16 @@ public class AlloyModelSetTools {
                 if (line.contains("Number of removed files:")) {
                     numUtilFiles = Integer.parseInt(line.split(" ")[4]);
                 }
-                System.out.println(line);
+                logger.info(line);
             }
             reader.close();
             int exitVal = process.waitFor();
             if (exitVal != 0) {
-                System.out.println("Abnormal Behaviour! Something bad happened when cleaning up files.");
+                logger.warning("Abnormal Behaviour! Something bad happened when cleaning up files.");
                 return 1;
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            logger.log(Level.SEVERE, e.getMessage(), e);
             return 1;
         }
 
@@ -369,7 +422,7 @@ public class AlloyModelSetTools {
             try {
                 readmefile.write("Removed " + numUtilFiles + " util files" + "\n");
             } catch (Exception e) {
-                e.printStackTrace();
+                logger.log(Level.SEVERE, e.getMessage(), e);
                 return 1;
             }
         }
@@ -379,7 +432,7 @@ public class AlloyModelSetTools {
             try {
                 readmefile.write("Removed " + numDuplicateFiles + " duplicate files" + "\n");
             } catch (Exception e) {
-                e.printStackTrace();
+                logger.log(Level.SEVERE, e.getMessage(), e);
                 return 1;
             }
         }
@@ -395,7 +448,7 @@ public class AlloyModelSetTools {
                 readmefile.write("Removed " + numDoNotParse + " files that " +
                         "do not parse." + "\n");
             } catch (Exception e) {
-                e.printStackTrace();
+                logger.log(Level.SEVERE, e.getMessage(), e);
                 return 1;
             }
         }
@@ -411,11 +464,11 @@ public class AlloyModelSetTools {
                     new InputStreamReader(process.getInputStream()));
             int exitVal = process.waitFor();
             if (exitVal != 0) {
-                System.out.println("Abnormal Behaviour! Something bad happened when cleaning up files.");
+                logger.warning("Abnormal Behaviour! Something bad happened when cleaning up files.");
                 return 1;
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            logger.log(Level.SEVERE, e.getMessage(), e);
             return 1;
         }
 
@@ -458,8 +511,6 @@ public class AlloyModelSetTools {
             }
 
             ProcessBuilder builder = new ProcessBuilder(command);
-            // Comment out this line to get more information: what exception is thrown
-            // builder.inheritIO();
             return builder.start();
         }
     }
@@ -475,47 +526,71 @@ public class AlloyModelSetTools {
         SUCCESS, TOOSHORT, TIMEOUT, EXCEPTION, UNKNOWN
     }
 
+    public static class Result {
+        public final Status status;
+        public final Long time;
+        public final String satisfiable;
+
+        public Result(Status x, Long y, String z) {
+            this.status = x;
+            this.time = y;
+            this.satisfiable = z;
+        }
+    }
+
     // Run the i-th command in the als file specified with the filePath, with
     // scope set to overallScope. If overallScope is -1, runs the original
     // command. Returns enum status as explained above.
-    public static Status runCommand(String filePath, int i,
-                                    int overallScope) {
+    public static Result runCommand(String filePath, int i, int overallScope) {
         try {
             Process process = JavaProcess.getJavaProcess(RunCommand.class,
                     Arrays.asList(filePath, String.valueOf(i), String.valueOf(overallScope)));
             BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
             String line;
-            long executionTime = higher_bound_of_time_range_in_seconds;
+            long executionTime = higher_bound_of_time_range_in_seconds * 1000000000;
+            String satisfiable = "";
+            boolean outOfMemoryError = false;
             while ((line = reader.readLine()) != null) {
                 if (line.contains("Execution time(ns)")) {
                     executionTime = Long.parseLong(line.split(": ")[1]);
+                } else if (line.contains("Satisfiable?")) {
+                    satisfiable = line.split(": ")[1];
+                } else if (line.contains("java.lang.OutOfMemoryError")) {
+                    outOfMemoryError = true;
                 }
-                System.out.println(line);
+                logger.info(line);
             }
             int returnValue = process.waitFor();
             if (returnValue == 0) {
-                System.out.println("Java Process: Alright!");
-                if (executionTime >= lower_bound_of_time_range_in_seconds * 1000000000) {
-                    return Status.SUCCESS;
+                logger.info("Java Process: Alright!");
+                if (executionTime > higher_bound_of_time_range_in_seconds * 1000000000) {
+                    return new Result(Status.TIMEOUT, (long) -1, "");
+                } else if (executionTime >= lower_bound_of_time_range_in_seconds * 1000000000) {
+                    return new Result(Status.SUCCESS, executionTime, satisfiable);
                 } else {
-                    System.out.println("Takes too short!");
-                    return Status.TOOSHORT;
+                    logger.info("Takes too short!");
+                    return new Result(Status.TOOSHORT, executionTime, satisfiable);
                 }
             } else if (returnValue == 1) {
-                System.out.println("Java Process: Timeout!");
-                System.out.println("Takes too long!");
-                return Status.TIMEOUT;
+                logger.info("Java Process: Timeout!");
+                logger.info("Takes too long!");
+                return new Result(Status.TIMEOUT, (long) -1, "");
             } else if (returnValue == 2) {
-                System.out.println("Java Process: Exception thrown!");
-                return Status.EXCEPTION;
+                logger.info("Java Process: Exception thrown!");
+                if (outOfMemoryError) {
+                    logger.info("Out of memory error, treated as timeout");
+                    return new Result(Status.TIMEOUT, (long) -1, "");
+                } else {
+                    return new Result(Status.EXCEPTION, (long) -1, "");
+                }
             } else {
-                System.out.println("Java Process: Unknown state!");
-                return Status.UNKNOWN;
+                logger.warning("Java Process: Unknown state!");
+                return new Result(Status.UNKNOWN, (long) -1, "");
             }
         } catch (Exception e) {
-            System.out.println("Java Process: Unknown state!");
-            e.printStackTrace();
-            return Status.UNKNOWN;
+            logger.warning("Java Process: Unknown state!");
+            logger.log(Level.SEVERE, e.getMessage(), e);
+            return new Result(Status.UNKNOWN, (long) -1, "");
         }
     }
 
@@ -526,8 +601,8 @@ public class AlloyModelSetTools {
                                 int min_scope, int max_scope) {
         if (max_scope >= min_scope) {
             int mid_scope = min_scope + (max_scope - min_scope) / 2;
-
-            Status exitStatus = runCommand(als_file_path, which_command, mid_scope);
+            lastResult = runCommand(als_file_path, which_command, mid_scope);
+            Status exitStatus = lastResult.status;
             // If mid_scope is what we want
             if (exitStatus == Status.SUCCESS)
                 return mid_scope;
@@ -538,8 +613,7 @@ public class AlloyModelSetTools {
                 return binarySearch(als_file_path, which_command, min_scope, mid_scope - 1);
 
             if (exitStatus == Status.EXCEPTION || exitStatus == Status.UNKNOWN) {
-                // TODO: Not sure what to do
-                System.out.println("Exception or unknown error thrown when doing binary search with scope " + mid_scope);
+                logger.warning("Exception or unknown error thrown when doing binary search with scope " + mid_scope);
                 return -1;
             }
 
@@ -555,10 +629,37 @@ public class AlloyModelSetTools {
         return "Success for the " + i + "-th command with overall scope " + scope;
     }
 
-    static Integer ExtractSatUnsatModels(File[] files) {
+    public static void csvFailureRecord(String file_path, int i, Command command, String reason) throws IOException {
+        csvPrinter.printRecord(file_path, i, command, "", "", "", reason);
+        csvPrinter.flush();
+    }
+
+    public static void csvSuccessRecord(String file_path, int i, Command command, int scope) throws IOException {
+        csvPrinter.printRecord(file_path, i, command,
+                RunCommand.changeOverallScope(command, scope), scope,
+                String.format("%.2f", (float) lastResult.time / 1000000000), lastResult.satisfiable);
+        csvPrinter.flush();
+        if (lastResult.satisfiable.equals("SAT")) {
+            satCommands.add(RunCommand.changeOverallScope(command, scope));
+        } else if (lastResult.satisfiable.equals("UNSAT")) {
+            unsatCommands.add(RunCommand.changeOverallScope(command, scope));
+        }
+    }
+
+    public static void printBinarySearchResult(int scope, String file_path, int i, Command command) throws IOException {
+        if (scope == -1) {
+            logger.info("Scope not found");
+            csvFailureRecord(file_path, i, command, "Not Found after binary search");
+        } else {
+            logger.info(successMessage(i, scope));
+            csvSuccessRecord(file_path, i, command, scope);
+        }
+    }
+
+    static Integer ExtractModelsFromFile(File[] files) {
         for (File file : files) {
             if (file.isDirectory()) {
-                ExtractSatUnsatModels(file.listFiles());
+                ExtractModelsFromFile(file.listFiles());
             } else {
                 try {
                     Module world = CompUtil.parseEverything_fromFile(null, null, file.getPath());
@@ -568,97 +669,143 @@ public class AlloyModelSetTools {
 
                     options.solver = A4Options.SatSolver.SAT4J;
 
+                    satCommands.clear();
+                    unsatCommands.clear();
                     for (int i = 0; i < world.getAllCommands().size(); i++) {
                         Command command = world.getAllCommands().get(i);
-                        // If we find a cmd that has startingscope!=endingscope, then let’s not include this cmd in our tests
+                        // If we find a cmd that has startingscope!=endingscope, then let's not include this cmd in our tests
                         boolean containsGrowingSig = false;
                         for (CommandScope cs : command.scope) {
                             if (cs.startingScope != cs.endingScope) {
-                                System.out.println("Growing sig detected! startingScope != endingScope for command: " + command);
+                                logger.info("Growing sig detected! startingScope != endingScope for command: " + command);
                                 containsGrowingSig = true;
+                                csvFailureRecord(file.getPath(), i, command, "Growing Sig");
                                 break;
                             }
                         }
                         if (containsGrowingSig) continue;
-                        switch (runCommand(file.getPath(), i, -1)) {
+                        lastResult = runCommand(file.getPath(), i, -1);
+                        switch (lastResult.status) {
                             case SUCCESS:
-                                System.out.println("Success for the " + i + "-th command! Print out the file next!");
+                                logger.info("Success for the " + i + "-th command with the original command!");
+                                csvPrinter.printRecord(file.getPath(), i, command, "same", command.overall,
+                                        String.format("%.2f", (float) lastResult.time / 1000000000), lastResult.satisfiable);
+                                csvPrinter.flush();
+                                if (lastResult.satisfiable.equals("SAT")) {
+                                    satCommands.add(command);
+                                } else if (lastResult.satisfiable.equals("UNSAT")) {
+                                    unsatCommands.add(command);
+                                }
                                 break;
                             case TOOSHORT:
                                 if (command.overall == -1) {
                                     // Try the maximum scope first, if it is still too short, do nothing.
-                                    if (runCommand(file.getPath(), i, max_scope_to_stop_looking_for_scope) != Status.TOOSHORT) {
-                                        binarySearch(file.getPath(), i, 4, max_scope_to_stop_looking_for_scope);
+                                    lastResult = runCommand(file.getPath(), i, max_scope);
+                                    Status maxScopeStatus = lastResult.status;
+                                    if (maxScopeStatus == Status.SUCCESS) {
+                                        logger.info(successMessage(i, max_scope));
+                                        csvSuccessRecord(file.getPath(), i, command, max_scope);
+                                    } else if (maxScopeStatus != Status.TOOSHORT) {
+                                        int scope = binarySearch(file.getPath(), i, Math.max(4, min_scope), max_scope);
+                                        printBinarySearchResult(scope, file.getPath(), i, command);
                                     } else {
-                                        System.out.println("Cannot find scope under specified max scope for the " + i +
-                                                "-th command!");
+                                        logger.info("Cannot find scope under specified max scope for the " + i + "-th command!");
+                                        csvFailureRecord(file.getPath(), i, command, "Cannot find under max scope");
                                     }
                                 } else {
-                                    // drop all individual scopes and exact scopes, run this command again
+                                    Status originalScopeStatus = Status.TOOSHORT;
+                                    // If it has any individual scopes or exact scope, drop all individual scopes and
+                                    // exact scopes and run this command again
+                                    if (command.scope.size() != 0) {
+                                        lastResult = runCommand(file.getPath(), i, command.overall);
+                                        originalScopeStatus = lastResult.status;
+                                    }
                                     int scope;
-                                    switch (runCommand(file.getPath(), i, command.overall)) {
+                                    switch (originalScopeStatus) {
                                         case SUCCESS:
-                                            System.out.println(successMessage(i, command.overall));
+                                            logger.info(successMessage(i, command.overall));
+                                            csvSuccessRecord(file.getPath(), i, command, command.overall);
                                             break;
                                         case TOOSHORT:
                                             // Try the maximum scope first, if it is still too short, do nothing.
-                                            if (runCommand(file.getPath(), i, max_scope_to_stop_looking_for_scope) != Status.TOOSHORT) {
-                                                scope = binarySearch(file.getPath(), i, command.overall + 1, max_scope_to_stop_looking_for_scope);
-                                                System.out.println(scope == -1 ? "Scope not found" : successMessage(i, scope));
+                                            lastResult = runCommand(file.getPath(), i, max_scope);
+                                            Status maxScopeStatus = lastResult.status;
+                                            if (maxScopeStatus == Status.SUCCESS) {
+                                                logger.info(successMessage(i, max_scope));
+                                                csvSuccessRecord(file.getPath(), i, command, max_scope);
+                                            } else if (maxScopeStatus != Status.TOOSHORT) {
+                                                scope = binarySearch(file.getPath(), i, command.overall + 1, max_scope);
+                                                printBinarySearchResult(scope, file.getPath(), i, command);
                                             } else {
-                                                System.out.println("Cannot find scope under specified max scope for the " + i + "-th command!");
+                                                logger.info("Cannot find scope under specified max scope for the " + i + "-th command!");
+                                                csvFailureRecord(file.getPath(), i, command, "Cannot find under max scope");
                                             }
                                             break;
                                         case TIMEOUT:
-                                            scope = binarySearch(file.getPath(), i, min_scope_to_stop_looking_for_scope, command.overall - 1);
-                                            System.out.println(scope == -1 ? "Scope not found" : successMessage(i, scope));
+                                            scope = binarySearch(file.getPath(), i, min_scope, command.overall - 1);
+                                            printBinarySearchResult(scope, file.getPath(), i, command);
                                             break;
                                         case EXCEPTION:
-                                            System.out.println("Exception thrown!");
+                                            logger.info("Exception thrown!");
+                                            csvFailureRecord(file.getPath(), i, command, "Exception");
                                             break;
                                         case UNKNOWN:
-                                            System.out.println("Unknown Error! The code should never reach here!");
+                                            logger.warning("Unknown Error! The code should never reach here!");
+                                            csvFailureRecord(file.getPath(), i, command, "Unknown");
                                             break;
                                     }
                                 }
                                 break;
                             case TIMEOUT:
                                 if (command.overall == -1) {
-                                    binarySearch(file.getPath(), i, min_scope_to_stop_looking_for_scope, 2);
+                                    int scope = binarySearch(file.getPath(), i, min_scope, 2);
+                                    printBinarySearchResult(scope, file.getPath(), i, command);
                                 } else {
-                                    // drop all individual scopes and exact scopes, run this command again
+                                    Status originalScopeStatus = Status.TIMEOUT;
+                                    // If it has any individual scopes or exact scope, drop all individual scopes and
+                                    // exact scopes and run this command again
+                                    if (command.scope.size() != 0) {
+                                        lastResult = runCommand(file.getPath(), i, command.overall);
+                                        originalScopeStatus = lastResult.status;
+                                    }
                                     int scope;
-                                    switch (runCommand(file.getPath(), i, command.overall)) {
+                                    switch (originalScopeStatus) {
                                         case SUCCESS:
-                                            System.out.println(successMessage(i, command.overall));
+                                            logger.info(successMessage(i, command.overall));
+                                            csvSuccessRecord(file.getPath(), i, command, command.overall);
                                             break;
                                         case TOOSHORT:
-                                            scope = binarySearch(file.getPath(), i, command.overall + 1, max_scope_to_stop_looking_for_scope);
-                                            System.out.println(scope == -1 ? "Scope not found" : successMessage(i, scope));
+                                            scope = binarySearch(file.getPath(), i, command.overall + 1, max_scope);
+                                            printBinarySearchResult(scope, file.getPath(), i, command);
                                             break;
                                         case TIMEOUT:
-                                            scope = binarySearch(file.getPath(), i, min_scope_to_stop_looking_for_scope, command.overall - 1);
-                                            System.out.println(scope == -1 ? "Scope not found" : successMessage(i, scope));
+                                            scope = binarySearch(file.getPath(), i, min_scope, command.overall - 1);
+                                            printBinarySearchResult(scope, file.getPath(), i, command);
                                             break;
                                         case EXCEPTION:
-                                            System.out.println("Exception thrown!");
+                                            logger.info("Exception thrown!");
+                                            csvFailureRecord(file.getPath(), i, command, "Exception");
                                             break;
                                         case UNKNOWN:
-                                            System.out.println("Unknown Error! The code should never reach here!");
+                                            logger.warning("Unknown Error! The code should never reach here!");
+                                            csvFailureRecord(file.getPath(), i, command, "Unknown");
                                             break;
                                     }
                                 }
                                 break;
                             case EXCEPTION:
-                                System.out.println("Exception thrown!");
+                                logger.info("Exception thrown!");
+                                csvFailureRecord(file.getPath(), i, command, "Exception");
                                 break;
                             case UNKNOWN:
-                                System.out.println("Unknown Error! The code should never reach here!");
+                                logger.warning("Unknown Error! The code should never reach here!");
+                                csvFailureRecord(file.getPath(), i, command, "Unknown");
                                 break;
                         }
                     }
+                    csvPrinter.flush();
                 } catch (Exception e) {
-                    e.printStackTrace();
+                    logger.log(Level.SEVERE, e.getMessage(), e);
                     return 1;
                 }
             }
@@ -666,36 +813,59 @@ public class AlloyModelSetTools {
         return 0;
     }
 
-    public static void main(String[] args) {
-
-        // Start a new model set directory
-        // expects to be run in root of alloy-models-sets directory
-        if (CreateModelSetDir() == 1) {
-            return;
+    static Integer ExtractSatUnsatModels() {
+        // Open the CSV writer
+        FileWriter csvWriter;
+        try {
+            csvWriter = new FileWriter(dirname + "/commandScopes.csv");
+            csvPrinter = new CSVPrinter(csvWriter, CSVFormat.DEFAULT.withHeader("File Path", "i-th Command",
+                    "Original Command", "New Command", "Overall Scope", "Time", "Satisfiable?"));
+        } catch (Exception e) {
+            logger.log(Level.SEVERE, e.getMessage(), e);
+            return -1;
         }
 
-        if (gatherFromGithub) {
-            // Gather from github
-            if (GatherFromGithub() == 1) {
-                System.out.println("Failed to gather models from github");
-                return;
+        // Extract models
+        for (File f : new File(dirname).listFiles()) {
+            if (f.isDirectory()) {
+                if (ExtractModelsFromFile(f.listFiles()) == 1) {
+                    logger.warning("Abnormal Behaviour! Something bad happened when extracting SAT and UNSAT models.");
+                }
             }
         }
 
-        // Gather from existing models-sets
-        if (gatherFromExistingModelSets) {
-            if (GatherFromExistingModelSets() == 1) {
-                System.out.println("Failed to gather models from existing model sets");
-                return;
+        // TODO: Delete the original model-set directory
+        // Print out models count
+        try {
+            // Close csv file
+            csvWriter.close();
+
+            numAlsFiles = 0;
+            if (new File(dirname + "/sat").exists()) {
+                for (File f : new File(dirname + "/sat").listFiles()) {
+                    if (f.isDirectory()) {
+                        CountFiles(f.listFiles(), false);
+                    }
+                }
             }
+            readmefile.write("\nExtracted " + numAlsFiles + " SAT models.\n");
+            numAlsFiles = 0;
+            if (new File(dirname + "/unsat").exists()) {
+                for (File f : new File(dirname + "/unsat").listFiles()) {
+                    if (f.isDirectory()) {
+                        CountFiles(f.listFiles(), false);
+                    }
+                }
+            }
+            readmefile.write("\nExtracted " + numAlsFiles + " UNSAT models.\n");
+        } catch (Exception e) {
+            logger.log(Level.SEVERE, e.getMessage(), e);
+            return -1;
         }
+        return 0;
+    }
 
-        // Remove non-Alloy files, Alloy util/library models and duplicate models if options set
-        if (CleanUpFiles() == 1) {
-            System.out.println("Failed to remove not needed files");
-            return;
-        }
-
+    static void printNumOfFiles() {
         HashSet<String> existing_model_sets_name = new HashSet<>();
         for (String path : existing_model_sets) {
             existing_model_sets_name.add(Paths.get(path).getFileName().toString());
@@ -726,61 +896,54 @@ public class AlloyModelSetTools {
                         "existing model set directories.";
             }
             readmefile.write(outputCount + "\n");
-
-            readmefile.close();
         } catch (Exception e) {
-            System.out.println("Failed to close readme file");
+            logger.warning("Failed to write file count to readme file");
         }
+    }
+
+    public static void main(String[] args) {
+
+        // Start a new model set directory
+        // expects to be run in root of alloy-models-sets directory
+        if (CreateModelSetDir() == 1) {
+            return;
+        }
+
+        if (gatherFromGithub) {
+            // Gather from github
+            if (GatherFromGithub() == 1) {
+                logger.warning("Failed to gather models from github");
+                return;
+            }
+        }
+
+        // Gather from existing models-sets
+        if (gatherFromExistingModelSets) {
+            if (GatherFromExistingModelSets() == 1) {
+                logger.warning("Failed to gather models from existing model sets");
+                return;
+            }
+        }
+
+        // Remove non-Alloy files, Alloy util/library models and duplicate models if options set
+        if (CleanUpFiles() == 1) {
+            logger.warning("Failed to remove not needed files");
+            return;
+        }
+
+        printNumOfFiles();
 
         // Extract sat and unsat models
         if (extractSatUnsatModels) {
-            // Create SAT/UNSAT directories
-            try {
-                readmefile.close();
-                Path source = Path.of(dirname + "/README.md");
-                Path target = Path.of(dirname + "-SAT/README.md");
-                Files.createDirectories(target.getParent());
-                Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING);
-                target = Path.of(dirname + "-UNSAT/README.md");
-                Files.createDirectories(target.getParent());
-                Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING);
-            } catch (Exception e) {
-                e.printStackTrace();
+            if (ExtractSatUnsatModels() == 1) {
+                logger.warning("Failed to extract SAT and UNSAT models.");
             }
+        }
 
-            // Extract models
-            for (File f : new File(dirname).listFiles()) {
-                if (f.isDirectory()) {
-                    if (ExtractSatUnsatModels(f.listFiles()) == 1) {
-                        System.out.println("Abnormal Behaviour! Something bad happened when extracting SAT and UNSAT models.");
-                    }
-                }
-            }
-
-            // Delete the original model-set directory and print out models count
-            try {
-                FileUtils.deleteDirectory(new File(dirname));
-                numAlsFiles = 0;
-                for (File f : new File(dirname + "-SAT").listFiles()) {
-                    if (f.isDirectory()) {
-                        CountFiles(f.listFiles(), false);
-                    }
-                }
-                readmefile = new FileWriter(dirname + "-SAT/README.md", true);
-                readmefile.write("\nExtracted " + numAlsFiles + " SAT models.\n");
-                readmefile.close();
-                numAlsFiles = 0;
-                for (File f : new File(dirname + "-UNSAT").listFiles()) {
-                    if (f.isDirectory()) {
-                        CountFiles(f.listFiles(), false);
-                    }
-                }
-                readmefile = new FileWriter(dirname + "-UNSAT/README.md", true);
-                readmefile.write("\nExtracted " + numAlsFiles + " UNSAT models.\n");
-                readmefile.close();
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
+        try {
+            readmefile.close();
+        } catch (Exception e) {
+            logger.warning("Failed to close readme file");
         }
     }
 }

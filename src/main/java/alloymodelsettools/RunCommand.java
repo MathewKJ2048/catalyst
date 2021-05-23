@@ -39,7 +39,7 @@ public class RunCommand {
     // If the new overall scope is -1, leave the command unchanged.
     // Otherwise, set the overall scope, and drop all individual scopes and
     // exact scopes.
-    public static Command changeCommandOverallScope(Command cmd, int overall) {
+    public static Command changeOverallScope(Command cmd, int overall) {
         if (overall == -1) return cmd;
         return new Command(cmd.pos, cmd.nameExpr, cmd.label, cmd.check, overall,
                 cmd.bitwidth, cmd.maxseq, cmd.minprefix, cmd.maxprefix,
@@ -53,6 +53,7 @@ public class RunCommand {
         File file = new File(args[0]);
         int whichCommand = Integer.parseInt(args[1]);
         int overall = Integer.parseInt(args[2]);
+
         // Parse+typecheck the model
         System.out.println("=========== Parsing+Typechecking " + file.getPath() + " =============");
         try {
@@ -63,7 +64,7 @@ public class RunCommand {
 
             options.solver = A4Options.SatSolver.SAT4J;
             Command command = world.getAllCommands().get(whichCommand);
-            final Command newCommand = changeCommandOverallScope(command, overall);
+            final Command newCommand = changeOverallScope(command, overall);
             ExecutorService executor = Executors.newSingleThreadExecutor();
             Future<Long> handler = executor.submit(new Callable() {
                 @Override
@@ -95,15 +96,15 @@ public class RunCommand {
             } catch (Exception e) {
                 // Exception thrown
                 System.out.println("Something bad happened when executing command: " + newCommand);
+                e.printStackTrace(System.out);
                 shutdownAndAwaitTermination(executor);
-                e.printStackTrace();
                 System.exit(2);
             }
             shutdownAndAwaitTermination(executor);
         } catch (Exception e) {
             // Exception thrown
             System.out.println("Something bad happened in the RunCommand process.");
-            e.printStackTrace();
+            e.printStackTrace(System.out);
             System.exit(2);
         }
         // Should never reach here. This line is added here to ensure it always terminates.
