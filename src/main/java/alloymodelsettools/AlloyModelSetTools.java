@@ -23,6 +23,8 @@ package alloymodelsettools;
 
 import java.io.*;
 
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.time.format.DateTimeFormatter;
 import java.time.LocalDateTime;
@@ -31,9 +33,12 @@ import java.util.logging.FileHandler;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.logging.SimpleFormatter;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVPrinter;
+import org.apache.commons.io.FileUtils;
 import oshi.SystemInfo;
 import oshi.hardware.HardwareAbstractionLayer;
 
@@ -69,16 +74,30 @@ public class AlloyModelSetTools {
     static boolean removeUtilModels = true;
     static boolean removeDuplicateFiles = true;
     static boolean removeDoNotParse = true;
+    // Remove files with common file names to avoid extracting models with high
+    // similarity, like those in Jackson's book.
+    static boolean hitlistFilter = true;
+    static String jackson_model_dir = "2021-05-25-13-24-28-jackson";
+    static String[] jackson_model_names = {"abstractMemory", "addressBook", "barbers", "cacheMemory", "checkCache",
+            "checkFixedSize", "closure", "distribution", "filesystem", "fixedSizeMemory", "grandpa", "hotel", "lights",
+            "lists", "mediaAssets", "phones", "prison", "properties", "ring", "sets", "spanning", "tree", "tube", "undirected"};
+    // Put additional file names (other than Jackson's) you also want to filter
+    // on here. For each name, only one model containing it will be kept.
+    // For example, "ownGrandpa".
+    static String[] additional_common_file_names = {};
     static boolean extractSatUnsatModels = true;
     static long lower_bound_of_time_range_in_seconds = 2 * 60;
-    static long higher_bound_of_time_range_in_seconds = 15 * 60;
+    static long higher_bound_of_time_range_in_seconds = 10 * 60;
     // min scope to stop looking for scope
-    static int min_scope = 1;
+    static int min_scope = 10;
     // max scope to stop looking for scope
-    static int max_scope = 200;
+    static int max_scope = 300;
+    static int num_sat_wanted = 200;
+    static int num_unsat_wanted = 200;
     // You don't need to change anything after this line
 
     // static variables
+    static Random randomGenerator = new Random();
     static FileWriter readmefile;
     static String dirname;
     static HashMap<String, List<File>> alsFileNames = new HashMap<>();
@@ -86,11 +105,14 @@ public class AlloyModelSetTools {
     static int numFilesFromExisting = 0;
     static int numDuplicateFiles = 0;
     static int numDoNotParse = 0;
+    static int numHitListRemoved = 0;
+    static HashSet<String> files_encountered = new HashSet<>();
     static Logger logger;
     static CSVPrinter csvPrinter;
     static Result lastResult;
-    static List<Command> satCommands = new ArrayList<>();
-    static List<Command> unsatCommands = new ArrayList<>();
+    static List<String> file_names = new ArrayList<String>();
+    static int num_sat = 0;
+    static int num_unsat = 0;
     // stdio is used for error output
 
     static String sha256(String s) {
@@ -327,7 +349,6 @@ public class AlloyModelSetTools {
                 GetAllDuplicateFiles(f.listFiles());
             }
         }
-        Random randomGenerator = new Random();
         for (List<File> files : alsFileNames.values()) {
             if (files.size() > 1) {
                 // Look at the file size
@@ -377,6 +398,38 @@ public class AlloyModelSetTools {
                         logger.warning("Abnormal Behaviour! Something bad happened when deleting files do not parse.");
                     }
                     alsFileNames.remove(file.getName());
+                }
+            }
+        }
+    }
+
+    public static void HitlistFilter(File[] files) {
+        for (File file : files) {
+            if (file.isDirectory()) {
+                HitlistFilter(file.listFiles());
+            } else {
+                String fname = file.getName();
+                if (Arrays.stream(jackson_model_names).anyMatch(fname::contains)) {
+                    // if it is a filename in Jackson’s original repo we discard this file
+                    if (!file.delete()) {
+                        logger.warning("Abnormal Behaviour! Something bad happened when deleting files in hitlist.");
+                    }
+                    logger.info(file.getPath() + " removed by the hitlist filter");
+                    numHitListRemoved++;
+                } else {
+                    // if it is not a filename in Jackson’s original repo, keep the first one we encounter and then no more of that name on the hitlist
+                    Optional<String> common_name = Arrays.stream(additional_common_file_names).filter(fname::contains).findFirst();
+                    if (common_name.isPresent()) {
+                        if (files_encountered.contains(common_name.get())) {
+                            if (!file.delete()) {
+                                logger.warning("Abnormal Behaviour! Something bad happened when deleting files in hitlist.");
+                            }
+                            logger.info(file.getPath() + " removed by the hitlist filter");
+                            numHitListRemoved++;
+                        } else {
+                            files_encountered.add(common_name.get());
+                        }
+                    }
                 }
             }
         }
@@ -447,6 +500,22 @@ public class AlloyModelSetTools {
             try {
                 readmefile.write("Removed " + numDoNotParse + " files that " +
                         "do not parse." + "\n");
+            } catch (Exception e) {
+                logger.log(Level.SEVERE, e.getMessage(), e);
+                return 1;
+            }
+        }
+
+        if (hitlistFilter) {
+            for (File f : new File(dirname).listFiles()) {
+                // Skip the directory containing jackson's original models
+                if (f.isDirectory() && !f.getName().equals(jackson_model_dir)) {
+                    HitlistFilter(f.listFiles());
+                }
+            }
+
+            try {
+                readmefile.write("Removed " + numHitListRemoved + " files whose name is in hitlist." + "\n");
             } catch (Exception e) {
                 logger.log(Level.SEVERE, e.getMessage(), e);
                 return 1;
@@ -581,6 +650,7 @@ public class AlloyModelSetTools {
                     logger.info("Out of memory error, treated as timeout");
                     return new Result(Status.TIMEOUT, (long) -1, "");
                 } else {
+                    logger.warning("Attention! Other exceptions (not oom) are thrown.");
                     return new Result(Status.EXCEPTION, (long) -1, "");
                 }
             } else {
@@ -597,11 +667,24 @@ public class AlloyModelSetTools {
     // Returns one scope in range [min_scope, max_scope] whose runtime of the
     // i-th command in that als file falls in the desired time range.
     // -1 if we cannot find anything
-    static Integer binarySearch(String als_file_path, int which_command,
-                                int min_scope, int max_scope) {
+    static Integer binarySearch(String als_file_path, int which_command, Command cmd, int min_scope, int max_scope) {
         if (max_scope >= min_scope) {
             int mid_scope = min_scope + (max_scope - min_scope) / 2;
             lastResult = runCommand(als_file_path, which_command, mid_scope);
+            try {
+                if (num_sat >= num_sat_wanted && lastResult.satisfiable.equals("SAT")) {
+                    logger.info("Enough sat models");
+                    csvFailureRecord(als_file_path, which_command, cmd, "Enough sat models");
+                    return -1;
+                } else if (num_unsat >= num_unsat_wanted && lastResult.satisfiable.equals("UNSAT")) {
+                    logger.info("Enough unsat models");
+                    csvFailureRecord(als_file_path, which_command, cmd, "Enough unsat models");
+                    return -1;
+                }
+            } catch (Exception e) {
+                logger.log(Level.SEVERE, e.getMessage(), e);
+                return -1;
+            }
             Status exitStatus = lastResult.status;
             // If mid_scope is what we want
             if (exitStatus == Status.SUCCESS)
@@ -610,19 +693,44 @@ public class AlloyModelSetTools {
             // If mid_scope is takiRng too short, then it can only be present
             // in smaller scopes
             if (exitStatus == Status.TIMEOUT)
-                return binarySearch(als_file_path, which_command, min_scope, mid_scope - 1);
+                return binarySearch(als_file_path, which_command, cmd, min_scope, mid_scope - 1);
 
             if (exitStatus == Status.EXCEPTION || exitStatus == Status.UNKNOWN) {
                 logger.warning("Exception or unknown error thrown when doing binary search with scope " + mid_scope);
+                try {
+                    csvFailureRecord(als_file_path, which_command, cmd, "Other exceptions or unknown state");
+                } catch (Exception e) {
+                    logger.log(Level.SEVERE, e.getMessage(), e);
+                    return -1;
+                }
                 return -1;
             }
 
             // Else we will search for larger scopes
-            return binarySearch(als_file_path, which_command, mid_scope + 1, max_scope);
+            return binarySearch(als_file_path, which_command, cmd, mid_scope + 1, max_scope);
         }
 
-        // We reach here when no scope in the range have desired execution time
-        return -1;
+        try {
+            // We reach here when no scope in the range have desired execution time
+            if (max_scope < AlloyModelSetTools.min_scope) {
+                logger.info("Scope not found after searching for " + min_scope);
+                csvFailureRecord(als_file_path, which_command, cmd, "Scope not found above " + min_scope);
+                return -1;
+            } else if (min_scope > AlloyModelSetTools.max_scope) {
+                logger.info("Scope not found after searching for " + max_scope);
+                csvFailureRecord(als_file_path, which_command, cmd, "Scope not found under " + max_scope);
+                return -1;
+            } else {
+                logger.info("Scope not found");
+                csvFailureRecord(als_file_path, which_command, cmd, "Cannot find after binary search");
+                return -1;
+            }
+        } catch (
+                Exception e) {
+            logger.log(Level.SEVERE, e.getMessage(), e);
+            return -1;
+        }
+
     }
 
     static String successMessage(int i, int scope) {
@@ -639,181 +747,121 @@ public class AlloyModelSetTools {
                 RunCommand.changeOverallScope(command, scope), scope,
                 String.format("%.2f", (float) lastResult.time / 1000000000), lastResult.satisfiable);
         csvPrinter.flush();
-        if (lastResult.satisfiable.equals("SAT")) {
-            satCommands.add(RunCommand.changeOverallScope(command, scope));
-        } else if (lastResult.satisfiable.equals("UNSAT")) {
-            unsatCommands.add(RunCommand.changeOverallScope(command, scope));
-        }
     }
 
-    public static void printBinarySearchResult(int scope, String file_path, int i, Command command) throws IOException {
-        if (scope == -1) {
-            logger.info("Scope not found");
-            csvFailureRecord(file_path, i, command, "Not Found after binary search");
-        } else {
-            logger.info(successMessage(i, scope));
-            csvSuccessRecord(file_path, i, command, scope);
-        }
-    }
+    static Integer ExtractModelsFromFile(File file) {
+        try {
+            Module world = CompUtil.parseEverything_fromFile(null, null, file.getPath());
 
-    static Integer ExtractModelsFromFile(File[] files) {
-        for (File file : files) {
-            if (file.isDirectory()) {
-                ExtractModelsFromFile(file.listFiles());
-            } else {
-                try {
-                    Module world = CompUtil.parseEverything_fromFile(null, null, file.getPath());
+            // Choose some default options for how you want to execute the commands
+            A4Options options = new A4Options();
 
-                    // Choose some default options for how you want to execute the commands
-                    A4Options options = new A4Options();
+            options.solver = A4Options.SatSolver.SAT4J;
 
-                    options.solver = A4Options.SatSolver.SAT4J;
-
-                    satCommands.clear();
-                    unsatCommands.clear();
-                    for (int i = 0; i < world.getAllCommands().size(); i++) {
-                        Command command = world.getAllCommands().get(i);
-                        // If we find a cmd that has startingscope!=endingscope, then let's not include this cmd in our tests
-                        boolean containsGrowingSig = false;
-                        for (CommandScope cs : command.scope) {
-                            if (cs.startingScope != cs.endingScope) {
-                                logger.info("Growing sig detected! startingScope != endingScope for command: " + command);
-                                containsGrowingSig = true;
-                                csvFailureRecord(file.getPath(), i, command, "Growing Sig");
-                                break;
-                            }
-                        }
-                        if (containsGrowingSig) continue;
-                        lastResult = runCommand(file.getPath(), i, -1);
-                        switch (lastResult.status) {
-                            case SUCCESS:
-                                logger.info("Success for the " + i + "-th command with the original command!");
-                                csvPrinter.printRecord(file.getPath(), i, command, "same", command.overall,
-                                        String.format("%.2f", (float) lastResult.time / 1000000000), lastResult.satisfiable);
-                                csvPrinter.flush();
-                                if (lastResult.satisfiable.equals("SAT")) {
-                                    satCommands.add(command);
-                                } else if (lastResult.satisfiable.equals("UNSAT")) {
-                                    unsatCommands.add(command);
-                                }
-                                break;
-                            case TOOSHORT:
-                                if (command.overall == -1) {
-                                    // Try the maximum scope first, if it is still too short, do nothing.
-                                    lastResult = runCommand(file.getPath(), i, max_scope);
-                                    Status maxScopeStatus = lastResult.status;
-                                    if (maxScopeStatus == Status.SUCCESS) {
-                                        logger.info(successMessage(i, max_scope));
-                                        csvSuccessRecord(file.getPath(), i, command, max_scope);
-                                    } else if (maxScopeStatus != Status.TOOSHORT) {
-                                        int scope = binarySearch(file.getPath(), i, Math.max(4, min_scope), max_scope);
-                                        printBinarySearchResult(scope, file.getPath(), i, command);
-                                    } else {
-                                        logger.info("Cannot find scope under specified max scope for the " + i + "-th command!");
-                                        csvFailureRecord(file.getPath(), i, command, "Cannot find under max scope");
-                                    }
-                                } else {
-                                    Status originalScopeStatus = Status.TOOSHORT;
-                                    // If it has any individual scopes or exact scope, drop all individual scopes and
-                                    // exact scopes and run this command again
-                                    if (command.scope.size() != 0) {
-                                        lastResult = runCommand(file.getPath(), i, command.overall);
-                                        originalScopeStatus = lastResult.status;
-                                    }
-                                    int scope;
-                                    switch (originalScopeStatus) {
-                                        case SUCCESS:
-                                            logger.info(successMessage(i, command.overall));
-                                            csvSuccessRecord(file.getPath(), i, command, command.overall);
-                                            break;
-                                        case TOOSHORT:
-                                            // Try the maximum scope first, if it is still too short, do nothing.
-                                            lastResult = runCommand(file.getPath(), i, max_scope);
-                                            Status maxScopeStatus = lastResult.status;
-                                            if (maxScopeStatus == Status.SUCCESS) {
-                                                logger.info(successMessage(i, max_scope));
-                                                csvSuccessRecord(file.getPath(), i, command, max_scope);
-                                            } else if (maxScopeStatus != Status.TOOSHORT) {
-                                                scope = binarySearch(file.getPath(), i, command.overall + 1, max_scope);
-                                                printBinarySearchResult(scope, file.getPath(), i, command);
-                                            } else {
-                                                logger.info("Cannot find scope under specified max scope for the " + i + "-th command!");
-                                                csvFailureRecord(file.getPath(), i, command, "Cannot find under max scope");
-                                            }
-                                            break;
-                                        case TIMEOUT:
-                                            scope = binarySearch(file.getPath(), i, min_scope, command.overall - 1);
-                                            printBinarySearchResult(scope, file.getPath(), i, command);
-                                            break;
-                                        case EXCEPTION:
-                                            logger.info("Exception thrown!");
-                                            csvFailureRecord(file.getPath(), i, command, "Exception");
-                                            break;
-                                        case UNKNOWN:
-                                            logger.warning("Unknown Error! The code should never reach here!");
-                                            csvFailureRecord(file.getPath(), i, command, "Unknown");
-                                            break;
-                                    }
-                                }
-                                break;
-                            case TIMEOUT:
-                                if (command.overall == -1) {
-                                    int scope = binarySearch(file.getPath(), i, min_scope, 2);
-                                    printBinarySearchResult(scope, file.getPath(), i, command);
-                                } else {
-                                    Status originalScopeStatus = Status.TIMEOUT;
-                                    // If it has any individual scopes or exact scope, drop all individual scopes and
-                                    // exact scopes and run this command again
-                                    if (command.scope.size() != 0) {
-                                        lastResult = runCommand(file.getPath(), i, command.overall);
-                                        originalScopeStatus = lastResult.status;
-                                    }
-                                    int scope;
-                                    switch (originalScopeStatus) {
-                                        case SUCCESS:
-                                            logger.info(successMessage(i, command.overall));
-                                            csvSuccessRecord(file.getPath(), i, command, command.overall);
-                                            break;
-                                        case TOOSHORT:
-                                            scope = binarySearch(file.getPath(), i, command.overall + 1, max_scope);
-                                            printBinarySearchResult(scope, file.getPath(), i, command);
-                                            break;
-                                        case TIMEOUT:
-                                            scope = binarySearch(file.getPath(), i, min_scope, command.overall - 1);
-                                            printBinarySearchResult(scope, file.getPath(), i, command);
-                                            break;
-                                        case EXCEPTION:
-                                            logger.info("Exception thrown!");
-                                            csvFailureRecord(file.getPath(), i, command, "Exception");
-                                            break;
-                                        case UNKNOWN:
-                                            logger.warning("Unknown Error! The code should never reach here!");
-                                            csvFailureRecord(file.getPath(), i, command, "Unknown");
-                                            break;
-                                    }
-                                }
-                                break;
-                            case EXCEPTION:
-                                logger.info("Exception thrown!");
-                                csvFailureRecord(file.getPath(), i, command, "Exception");
-                                break;
-                            case UNKNOWN:
-                                logger.warning("Unknown Error! The code should never reach here!");
-                                csvFailureRecord(file.getPath(), i, command, "Unknown");
-                                break;
-                        }
-                    }
-                    csvPrinter.flush();
-                } catch (Exception e) {
-                    logger.log(Level.SEVERE, e.getMessage(), e);
-                    return 1;
+            int i = randomGenerator.nextInt(world.getAllCommands().size());
+            Command command = world.getAllCommands().get(i);
+            // If we find a cmd that has startingscope!=endingscope, then let's not include this cmd in our tests
+            boolean containsGrowingSig = false;
+            for (CommandScope cs : command.scope) {
+                if (cs.startingScope != cs.endingScope) {
+                    logger.info("Growing sig detected! startingScope != endingScope for command: " + command);
+                    containsGrowingSig = true;
+                    csvFailureRecord(file.getPath(), i, command, "Growing Sig");
+                    break;
                 }
             }
+            if (containsGrowingSig) return 0;
+            int scope = binarySearch(file.getPath(), i, command, min_scope, max_scope);
+            if (scope == -1) {
+                return 0;
+            } else {
+                logger.info(successMessage(i, scope));
+                csvSuccessRecord(file.getPath(), i, command, scope);
+            }
+
+            // Print files with new commands in sat and unsat directories
+            Path path = file.toPath();
+            Charset charset = StandardCharsets.UTF_8;
+            String content = Files.readString(path, charset);
+            // Remove all comments
+            content = content.replaceAll("(//.*|--.*|/\\*[\\S\\s]*?\\*/)\\n", "\n");
+            // Remove all commands using regular expression
+            // name : ["run" or "check"] anything* until the start of next block
+            String pattern = "(\\w+\\s*:\\s*)?(check|run)[\\S\\s]*?(?=(" +
+                    "(abstract|assert|check|fact|fun|module|none|open|pred|run|((var\\s+)?((lone|some|one)\\s+)?)sig)\\s|\\Z))";
+            Pattern r = Pattern.compile(pattern);
+            Matcher m = r.matcher(content);
+            int index = 0;
+            String nameExpr = "";
+            while (m.find()) {
+                // Extract the Expression of the i-th command to be used later
+                if (index == i) {
+                    if (m.group().contains("{")) {
+                        nameExpr = m.group().substring(m.group().indexOf("{"), m.group().lastIndexOf("}") + 1);
+                    }
+                    break;
+                }
+                index++;
+            }
+            content = content.replaceAll(pattern, "\n");
+
+            // Check if it really works
+            pattern = "\\b(run|check)\\b";
+            r = Pattern.compile(pattern);
+            m = r.matcher(content);
+            if (m.find()) {
+                logger.warning("Error, there's some old commands left unexpectedly.");
+                return 1;
+            }
+
+            Files.write(path, content.getBytes(charset));
+            // Copy file to sat or unsat directories, write new commands to it
+            Command new_command = RunCommand.changeOverallScope(command, scope);
+            Path target = Path.of(file.getPath().replace(dirname, dirname + "/" + lastResult.satisfiable.toLowerCase(Locale.ROOT)));
+            Files.createDirectories(target.getParent());
+            Files.copy(path, target, StandardCopyOption.REPLACE_EXISTING);
+            String command_str = new_command.toString();
+            // Replace Check and Run with lowercase letters
+            if (command_str.contains("Check ")) {
+                command_str = command_str.replaceFirst("Check", "check");
+            } else if (command_str.contains("Run ")) {
+                command_str = command_str.replaceFirst("Run", "run");
+            }
+            if (!nameExpr.isEmpty()) {
+                command_str = command_str.replace(" " + new_command.label + " ", " " + nameExpr + " ");
+            }
+            Files.write(target, ("\n" + command_str + "\n").getBytes(), StandardOpenOption.APPEND);
+            if (lastResult.satisfiable.equals("SAT")) {
+                num_sat++;
+            } else {
+                num_unsat++;
+            }
+        } catch (Exception e) {
+            logger.log(Level.SEVERE, e.getMessage(), e);
+            return 1;
         }
         return 0;
     }
 
+    static void getListFileNames(File[] files) {
+        for (File file : files) {
+            if (file.isDirectory()) {
+                getListFileNames(file.listFiles());
+            } else {
+                file_names.add(file.getPath());
+            }
+        }
+    }
+
     static Integer ExtractSatUnsatModels() {
+        // Get list of files for randomization
+        for (File f : new File(dirname).listFiles()) {
+            if (f.isDirectory()) {
+                getListFileNames(f.listFiles());
+            }
+        }
+        Collections.shuffle(file_names);
+
         // Open the CSV writer
         FileWriter csvWriter;
         try {
@@ -826,19 +874,27 @@ public class AlloyModelSetTools {
         }
 
         // Extract models
-        for (File f : new File(dirname).listFiles()) {
-            if (f.isDirectory()) {
-                if (ExtractModelsFromFile(f.listFiles()) == 1) {
+        for (String path : file_names) {
+            if (num_sat >= num_sat_wanted && num_unsat >= num_unsat_wanted) {
+                break;
+            }
+            if (new File(path).exists()) {
+                if (ExtractModelsFromFile(new File(path)) == 1) {
                     logger.warning("Abnormal Behaviour! Something bad happened when extracting SAT and UNSAT models.");
                 }
             }
         }
 
-        // TODO: Delete the original model-set directory
+        // Delete the original model-set directory
         // Print out models count
         try {
             // Close csv file
             csvWriter.close();
+            for (File f : new File(dirname).listFiles()) {
+                if (f.isDirectory() && !f.getName().equals("sat") && !f.getName().equals("unsat")) {
+                    FileUtils.deleteDirectory(f);
+                }
+            }
 
             numAlsFiles = 0;
             if (new File(dirname + "/sat").exists()) {
@@ -866,6 +922,7 @@ public class AlloyModelSetTools {
     }
 
     static void printNumOfFiles() {
+        numAlsFiles = 0;
         HashSet<String> existing_model_sets_name = new HashSet<>();
         for (String path : existing_model_sets) {
             existing_model_sets_name.add(Paths.get(path).getFileName().toString());
