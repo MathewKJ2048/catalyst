@@ -49,6 +49,7 @@ import edu.mit.csail.sdg.parser.CompUtil;
 import edu.mit.csail.sdg.translator.A4Options;
 import org.kohsuke.github.*;
 
+import static java.lang.Math.min;
 import static org.apache.commons.codec.digest.MessageDigestAlgorithms.SHA_256;
 
 import org.apache.commons.codec.digest.DigestUtils;
@@ -73,6 +74,7 @@ public class AlloyModelSetTools {
     // time.als, graph.als, natural.als, relation.als, sequence.als, ternary.als
     static boolean removeUtilModels = true;
     static boolean removeDuplicateFiles = true;
+    static boolean removeMultipleVersion = true;
     static boolean removeDoNotParse = true;
     // Remove files with common file names to avoid extracting models with high
     // similarity, like those in Jackson's book.
@@ -99,13 +101,13 @@ public class AlloyModelSetTools {
     // static variables
     static Random randomGenerator = new Random();
     static FileWriter readmefile;
+    static FileWriter satfile;
+    static FileWriter unsatfile;
     static String dirname;
     static HashMap<String, List<File>> alsFileNames = new HashMap<>();
     static int numAlsFiles = 0;
     static int numFilesFromExisting = 0;
-    static int numDuplicateFiles = 0;
-    static int numDoNotParse = 0;
-    static int numHitListRemoved = 0;
+    static int numFilesRemoved = 0;
     static HashSet<String> files_encountered = new HashSet<>();
     static Logger logger;
     static CSVPrinter csvPrinter;
@@ -366,7 +368,7 @@ public class AlloyModelSetTools {
                         int index = randomGenerator.nextInt(fs.size());
                         for (int i = 0; i < fs.size(); i++) {
                             if (i != index) {
-                                numDuplicateFiles++;
+                                numFilesRemoved++;
                                 logger.info("Duplicate: " + fs.get(i).getPath());
                                 if (!fs.get(i).delete()) {
                                     logger.warning("Abnormal Behaviour! Something bad happened when deleting duplicate files.");
@@ -375,6 +377,57 @@ public class AlloyModelSetTools {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // Returns the prefix of a string until a number or a ".als";
+    public static String prefixOf(String str) {
+        int i = 0;
+        while (i < str.length() && !Character.isDigit(str.charAt(i))) i++;
+        // If it starts with a number, return the entire string as prefix so that it won't be able to match anything
+        if (i == 0) return str;
+        i = min(i, str.split(".als", 2)[0].length());
+        return str.substring(0, i);
+    }
+
+    // Remove multiple version files in one directory
+    public static void RemoveMultipleVersionInDirectory(File file) {
+        // Sort all file names in alphabetical order
+        List<String> f_names = new ArrayList<String>();
+        for (File f : file.listFiles()) {
+            if (!f.isDirectory()) {
+                f_names.add(f.getName());
+            }
+        }
+        Collections.sort(f_names);
+        // Iterate through the sorted list.
+        // If it has the same prefix as previous file, discard the previous one;
+        // Otherwise, make this new prefix what we are comparing against.
+        if (!f_names.isEmpty()) {
+            String prefix = f_names.get(0) + "not";
+            String prev = f_names.get(0);
+            for (String f_name : f_names) {
+                if (prefixOf(f_name).equals(prefix)) {
+                    logger.info(file.getPath() + "/" + prev + " removed by the multiple version filter.");
+                    if (!new File(file.getPath() + "/" + prev).delete()) {
+                        logger.warning("Abnormal Behaviour! Something bad happened when deleting files do not parse.");
+                    }
+                } else {
+                    prefix = prefixOf(f_name);
+                }
+                prev = f_name;
+            }
+        }
+    }
+
+
+    public static void RemoveMultipleVersion(File[] files) {
+        // Get all files with duplicate names
+        for (File f : files) {
+            if (f.isDirectory()) {
+                RemoveMultipleVersion(f.listFiles());
+                RemoveMultipleVersionInDirectory(f);
             }
         }
     }
@@ -393,7 +446,7 @@ public class AlloyModelSetTools {
                 } catch (Exception e) {
                     logger.log(Level.INFO, e.getMessage(), e);
                     logger.info(file.getPath() + " do not parse");
-                    numDoNotParse++;
+                    numFilesRemoved++;
                     if (!file.delete()) {
                         logger.warning("Abnormal Behaviour! Something bad happened when deleting files do not parse.");
                     }
@@ -410,14 +463,14 @@ public class AlloyModelSetTools {
             } else {
                 String fname = file.getName();
                 if (Arrays.stream(jackson_model_names).anyMatch(fname::contains)) {
-                    // if it is a filename in Jackson’s original repo we discard this file
+                    // if it is a filename in Jackson's original repo we discard this file
                     if (!file.delete()) {
                         logger.warning("Abnormal Behaviour! Something bad happened when deleting files in hitlist.");
                     }
                     logger.info(file.getPath() + " removed by the hitlist filter");
-                    numHitListRemoved++;
+                    numFilesRemoved++;
                 } else {
-                    // if it is not a filename in Jackson’s original repo, keep the first one we encounter and then no more of that name on the hitlist
+                    // if it is not a filename in Jackson's original repo, keep the first one we encounter and then no more of that name on the hitlist
                     Optional<String> common_name = Arrays.stream(additional_common_file_names).filter(fname::contains).findFirst();
                     if (common_name.isPresent()) {
                         if (files_encountered.contains(common_name.get())) {
@@ -425,7 +478,7 @@ public class AlloyModelSetTools {
                                 logger.warning("Abnormal Behaviour! Something bad happened when deleting files in hitlist.");
                             }
                             logger.info(file.getPath() + " removed by the hitlist filter");
-                            numHitListRemoved++;
+                            numFilesRemoved++;
                         } else {
                             files_encountered.add(common_name.get());
                         }
@@ -481,9 +534,23 @@ public class AlloyModelSetTools {
         }
 
         if (removeDuplicateFiles) {
+            numFilesRemoved = 0;
             RemoveDuplicateFiles(dirname);
             try {
-                readmefile.write("Removed " + numDuplicateFiles + " duplicate files" + "\n");
+                readmefile.write("Removed " + numFilesRemoved + " duplicate files" + "\n");
+            } catch (Exception e) {
+                logger.log(Level.SEVERE, e.getMessage(), e);
+                return 1;
+            }
+        }
+
+        if (removeMultipleVersion) {
+            numFilesRemoved = 0;
+            RemoveMultipleVersion(new File(dirname).listFiles());
+
+            try {
+                readmefile.write("Removed " + numFilesRemoved + " files that " +
+                        "might be an earlier version of another file." + "\n");
             } catch (Exception e) {
                 logger.log(Level.SEVERE, e.getMessage(), e);
                 return 1;
@@ -491,6 +558,7 @@ public class AlloyModelSetTools {
         }
 
         if (removeDoNotParse) {
+            numFilesRemoved = 0;
             for (File f : new File(dirname).listFiles()) {
                 if (f.isDirectory()) {
                     RemoveDoNotParse(f.listFiles());
@@ -498,7 +566,7 @@ public class AlloyModelSetTools {
             }
 
             try {
-                readmefile.write("Removed " + numDoNotParse + " files that " +
+                readmefile.write("Removed " + numFilesRemoved + " files that " +
                         "do not parse." + "\n");
             } catch (Exception e) {
                 logger.log(Level.SEVERE, e.getMessage(), e);
@@ -507,6 +575,7 @@ public class AlloyModelSetTools {
         }
 
         if (hitlistFilter) {
+            numFilesRemoved = 0;
             for (File f : new File(dirname).listFiles()) {
                 // Skip the directory containing jackson's original models
                 if (f.isDirectory() && !f.getName().equals(jackson_model_dir)) {
@@ -515,7 +584,7 @@ public class AlloyModelSetTools {
             }
 
             try {
-                readmefile.write("Removed " + numHitListRemoved + " files whose name is in hitlist." + "\n");
+                readmefile.write("Removed " + numFilesRemoved + " files whose name is in hitlist." + "\n");
             } catch (Exception e) {
                 logger.log(Level.SEVERE, e.getMessage(), e);
                 return 1;
@@ -624,7 +693,7 @@ public class AlloyModelSetTools {
                     executionTime = Long.parseLong(line.split(": ")[1]);
                 } else if (line.contains("Satisfiable?")) {
                     satisfiable = line.split(": ")[1];
-                } else if (line.contains("java.lang.OutOfMemoryError")) {
+                } else if (line.contains("java.lang.OutOfMemoryError") || line.contains("Translation capacity exceeded.")) {
                     outOfMemoryError = true;
                 }
                 logger.info(line);
@@ -771,6 +840,10 @@ public class AlloyModelSetTools {
                 }
             }
             if (containsGrowingSig) return 0;
+            // If the command is the default one, it means there are no commands in this file. We skip the file.
+            if (command.label.equals("Default") && world.getAllReachableUserDefinedSigs().stream().map(x -> x.label).noneMatch(str -> str.equals("this/Default"))) {
+                return 0;
+            }
             int scope = binarySearch(file.getPath(), i, command, min_scope, max_scope);
             if (scope == -1) {
                 return 0;
@@ -782,12 +855,12 @@ public class AlloyModelSetTools {
             // Print files with new commands in sat and unsat directories
             Path path = file.toPath();
             Charset charset = StandardCharsets.UTF_8;
-            String content = Files.readString(path, charset);
+            String content = FileUtils.readFileToString(file);
             // Remove all comments
-            content = content.replaceAll("(//.*|--.*|/\\*[\\S\\s]*?\\*/)\\n", "\n");
+            content = content.replaceAll("//.*\\n|--.*\\n|/\\*[\\S\\s]*?\\*/", "\n");
             // Remove all commands using regular expression
             // name : ["run" or "check"] anything* until the start of next block
-            String pattern = "(\\w+\\s*:\\s*)?(check|run)[\\S\\s]*?(?=(" +
+            String pattern = "(\\w+\\s*:\\s*|\\b)(check|run)\\b[\\S\\s]*?(?=(" +
                     "(abstract|assert|check|fact|fun|module|none|open|pred|run|((var\\s+)?((lone|some|one)\\s+)?)sig)\\s|\\Z))";
             Pattern r = Pattern.compile(pattern);
             Matcher m = r.matcher(content);
@@ -814,12 +887,8 @@ public class AlloyModelSetTools {
                 return 1;
             }
 
-            Files.write(path, content.getBytes(charset));
-            // Copy file to sat or unsat directories, write new commands to it
+            // Write new commands to the file
             Command new_command = RunCommand.changeOverallScope(command, scope);
-            Path target = Path.of(file.getPath().replace(dirname, dirname + "/" + lastResult.satisfiable.toLowerCase(Locale.ROOT)));
-            Files.createDirectories(target.getParent());
-            Files.copy(path, target, StandardCopyOption.REPLACE_EXISTING);
             String command_str = new_command.toString();
             // Replace Check and Run with lowercase letters
             if (command_str.contains("Check ")) {
@@ -829,12 +898,22 @@ public class AlloyModelSetTools {
             }
             if (!nameExpr.isEmpty()) {
                 command_str = command_str.replace(" " + new_command.label + " ", " " + nameExpr + " ");
+            } else {
+                // For special case:  command_name: check pred_name for 5
+                // We want to use pred_name not command_name here
+                if (world.getAllReachableSigs().stream().map(x -> x.label).noneMatch(str -> str.contains(new_command.label))) {
+                    command_str = command_str.replace(" " + new_command.label + " ", " " + new_command.nameExpr + " ");
+                }
             }
-            Files.write(target, ("\n" + command_str + "\n").getBytes(), StandardOpenOption.APPEND);
+            content = content + "\n" + command_str + "\n";
+            Files.write(path, content.getBytes(charset));
+
             if (lastResult.satisfiable.equals("SAT")) {
                 num_sat++;
+                satfile.write(file.getPath().split(dirname + "/", 2)[1] + "\n");
             } else {
                 num_unsat++;
+                unsatfile.write(file.getPath().split(dirname + "/", 2)[1] + "\n");
             }
         } catch (Exception e) {
             logger.log(Level.SEVERE, e.getMessage(), e);
@@ -862,12 +941,19 @@ public class AlloyModelSetTools {
         }
         Collections.shuffle(file_names);
 
-        // Open the CSV writer
+
         FileWriter csvWriter;
         try {
+            // Open the CSV writer
             csvWriter = new FileWriter(dirname + "/commandScopes.csv");
             csvPrinter = new CSVPrinter(csvWriter, CSVFormat.DEFAULT.withHeader("File Path", "i-th Command",
                     "Original Command", "New Command", "Overall Scope", "Time", "Satisfiable?"));
+
+            // Open the .txt files containing sat/unsat model file names
+            File f = new File(dirname + "/sat_models.txt");
+            satfile = new FileWriter(dirname + "/sat_models.txt");
+            f = new File(dirname + "/unsat_models.txt");
+            unsatfile = new FileWriter(dirname + "/unsat_models.txt");
         } catch (Exception e) {
             logger.log(Level.SEVERE, e.getMessage(), e);
             return -1;
@@ -888,32 +974,13 @@ public class AlloyModelSetTools {
         // Delete the original model-set directory
         // Print out models count
         try {
-            // Close csv file
+            // Close csv file and .tet files
             csvWriter.close();
-            for (File f : new File(dirname).listFiles()) {
-                if (f.isDirectory() && !f.getName().equals("sat") && !f.getName().equals("unsat")) {
-                    FileUtils.deleteDirectory(f);
-                }
-            }
+            satfile.close();
+            unsatfile.close();
 
-            numAlsFiles = 0;
-            if (new File(dirname + "/sat").exists()) {
-                for (File f : new File(dirname + "/sat").listFiles()) {
-                    if (f.isDirectory()) {
-                        CountFiles(f.listFiles(), false);
-                    }
-                }
-            }
-            readmefile.write("\nExtracted " + numAlsFiles + " SAT models.\n");
-            numAlsFiles = 0;
-            if (new File(dirname + "/unsat").exists()) {
-                for (File f : new File(dirname + "/unsat").listFiles()) {
-                    if (f.isDirectory()) {
-                        CountFiles(f.listFiles(), false);
-                    }
-                }
-            }
-            readmefile.write("\nExtracted " + numAlsFiles + " UNSAT models.\n");
+            readmefile.write("Extracted " + num_sat + " SAT models.\n");
+            readmefile.write("Extracted " + num_unsat + " UNSAT models.\n");
         } catch (Exception e) {
             logger.log(Level.SEVERE, e.getMessage(), e);
             return -1;
