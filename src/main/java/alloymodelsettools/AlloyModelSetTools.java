@@ -38,6 +38,7 @@ import java.util.regex.Pattern;
 
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVPrinter;
+import org.apache.commons.csv.CSVRecord;
 import org.apache.commons.io.FileUtils;
 import oshi.SystemInfo;
 import oshi.hardware.HardwareAbstractionLayer;
@@ -56,7 +57,14 @@ import org.apache.commons.codec.digest.DigestUtils;
 import org.apache.commons.codec.binary.Base32;
 
 public class AlloyModelSetTools {
-    // Users set these options. You can choose to gather from Github
+    // Users set these options.
+    // By setting the following option to true, you will recreate a model sets from the supplied
+    // csv file.
+    static boolean recreateModelSets = false;
+    // Path to the summary file can either be relative or absolute,  relative path are expected to
+    // be relative to "alloy-model-sets/". One example: "model-sets/model_summary.csv".
+    static String pathToSummaryFile = "model-sets/model_summary.csv";
+    //  You can choose to gather from Github
     // repositories or from existing model sets or both.
     static boolean gatherFromGithub = true;
     // The max number of repos to clone, -1 for downloading all github repos
@@ -103,6 +111,7 @@ public class AlloyModelSetTools {
     static FileWriter readmefile;
     static FileWriter satfile;
     static FileWriter unsatfile;
+    static CSVPrinter summaryfile;
     static String dirname;
     static HashMap<String, List<File>> alsFileNames = new HashMap<>();
     static int numAlsFiles = 0;
@@ -759,7 +768,7 @@ public class AlloyModelSetTools {
             if (exitStatus == Status.SUCCESS)
                 return mid_scope;
 
-            // If mid_scope is takiRng too short, then it can only be present
+            // If mid_scope is taking too short, then it can only be present
             // in smaller scopes
             if (exitStatus == Status.TIMEOUT)
                 return binarySearch(als_file_path, which_command, cmd, min_scope, mid_scope - 1);
@@ -857,7 +866,7 @@ public class AlloyModelSetTools {
             Charset charset = StandardCharsets.UTF_8;
             String content = FileUtils.readFileToString(file);
             // Remove all comments
-            content = content.replaceAll("//.*\\n|--.*\\n|/\\*[\\S\\s]*?\\*/", "\n");
+            content = content.replaceAll("//.*|--.*|/\\*[\\S\\s]*?\\*/", "");
             // Remove all commands using regular expression
             // name : ["run" or "check"] anything* until the start of next block
             String pattern = "(\\w+\\s*:\\s*|\\b)(check|run)\\b[\\S\\s]*?(?=(" +
@@ -915,6 +924,8 @@ public class AlloyModelSetTools {
                 num_unsat++;
                 unsatfile.write(file.getPath().split(dirname + "/", 2)[1] + "\n");
             }
+            summaryfile.printRecord(file.getPath().split(dirname + "/", 2)[1], lastResult.satisfiable,
+                    command_str);
         } catch (Exception e) {
             logger.log(Level.SEVERE, e.getMessage(), e);
             return 1;
@@ -948,6 +959,8 @@ public class AlloyModelSetTools {
             csvWriter = new FileWriter(dirname + "/commandScopes.csv");
             csvPrinter = new CSVPrinter(csvWriter, CSVFormat.DEFAULT.withHeader("File Path", "i-th Command",
                     "Original Command", "New Command", "Overall Scope", "Time", "Satisfiable?"));
+            csvWriter = new FileWriter(dirname + "/model_summary.csv");
+            summaryfile = new CSVPrinter(csvWriter, CSVFormat.DEFAULT.withHeader("File Path", "Satisfiable?", "New Command"));
 
             // Open the .txt files containing sat/unsat model file names
             File f = new File(dirname + "/sat_models.txt");
@@ -956,7 +969,7 @@ public class AlloyModelSetTools {
             unsatfile = new FileWriter(dirname + "/unsat_models.txt");
         } catch (Exception e) {
             logger.log(Level.SEVERE, e.getMessage(), e);
-            return -1;
+            return 1;
         }
 
         // Extract models
@@ -974,8 +987,9 @@ public class AlloyModelSetTools {
         // Delete the original model-set directory
         // Print out models count
         try {
-            // Close csv file and .tet files
-            csvWriter.close();
+            // Close csv file and .txt files
+            csvPrinter.close();
+            summaryfile.close();
             satfile.close();
             unsatfile.close();
 
@@ -983,7 +997,7 @@ public class AlloyModelSetTools {
             readmefile.write("Extracted " + num_unsat + " UNSAT models.\n");
         } catch (Exception e) {
             logger.log(Level.SEVERE, e.getMessage(), e);
-            return -1;
+            return 1;
         }
         return 0;
     }
@@ -1025,6 +1039,83 @@ public class AlloyModelSetTools {
         }
     }
 
+    static Integer RecreateModelSet() {
+        FileWriter csvWriter;
+        try {
+            // Open the CSV reader
+            Reader in = new FileReader(pathToSummaryFile);
+            Iterable<CSVRecord> records = CSVFormat.DEFAULT
+                    .withHeader("File Path", "Satisfiable?", "New Command")
+                    .withFirstRecordAsHeader()
+                    .parse(in);
+            csvWriter = new FileWriter(dirname + "/result.csv");
+            summaryfile = new CSVPrinter(csvWriter, CSVFormat.DEFAULT.withHeader("File Path", "Status"));
+
+            // Open the .txt files containing sat/unsat model file names
+            File f = new File(dirname + "/sat_models.txt");
+            satfile = new FileWriter(dirname + "/sat_models.txt");
+            f = new File(dirname + "/unsat_models.txt");
+            unsatfile = new FileWriter(dirname + "/unsat_models.txt");
+
+            for (CSVRecord record : records) {
+                String file_path = record.get("File Path");
+                String satisfiable = record.get("Satisfiable?");
+                String command_str = record.get("New Command");
+
+                File file = new File(dirname + "/" + file_path);
+                if (!file.exists()) {
+                    summaryfile.printRecord(file_path, "file not found");
+                    continue;
+                }
+                try {
+                    // Print files with new commands in sat and unsat directories
+                    Path path = file.toPath();
+                    Charset charset = StandardCharsets.UTF_8;
+                    String content = FileUtils.readFileToString(file);
+                    // Remove all comments
+                    content = content.replaceAll("//.*|--.*|/\\*[\\S\\s]*?\\*/", "");
+                    // Remove all commands using regular expression
+                    // name : ["run" or "check"] anything* until the start of next block
+                    String pattern = "(\\w+\\s*:\\s*|\\b)(check|run)\\b[\\S\\s]*?(?=(" +
+                            "(abstract|assert|check|fact|fun|module|none|open|pred|run|((var\\s+)?((lone|some|one)\\s+)?)sig)\\s|\\Z))";
+                    content = content.replaceAll(pattern, "\n");
+                    content = content + "\n" + command_str + "\n";
+                    Files.write(path, content.getBytes(charset));
+
+                    if (satisfiable.equals("SAT")) {
+                        num_sat++;
+                        satfile.write(file.getPath().split(dirname + "/", 2)[1] + "\n");
+                    } else {
+                        num_unsat++;
+                        unsatfile.write(file.getPath().split(dirname + "/", 2)[1] + "\n");
+                    }
+                    summaryfile.printRecord(file_path, "success");
+                } catch (Exception e) {
+                    logger.log(Level.SEVERE, e.getMessage(), e);
+                }
+            }
+        } catch (Exception e) {
+            logger.log(Level.SEVERE, e.getMessage(), e);
+            return 1;
+        }
+
+        // Delete the original model-set directory
+        // Print out models count
+        try {
+            // Close csv file and .txt files
+            satfile.close();
+            unsatfile.close();
+            summaryfile.close();
+
+            readmefile.write("Recreated " + num_sat + " SAT models.\n");
+            readmefile.write("Recreated " + num_unsat + " UNSAT models.\n");
+        } catch (Exception e) {
+            logger.log(Level.SEVERE, e.getMessage(), e);
+            return 1;
+        }
+        return 0;
+    }
+
     public static void main(String[] args) {
 
         // Start a new model set directory
@@ -1033,10 +1124,37 @@ public class AlloyModelSetTools {
             return;
         }
 
+        if (recreateModelSets) {
+            // Override other settings, turn off all filters with randomness
+            gatherFromGithub = true;
+            num_git_repos = -1;
+            gatherFromExistingModelSets = false;
+            existing_model_sets = new String[]{};
+
+            removeNonAlloyFiles = true;
+            removeUtilModels = true;
+            removeDuplicateFiles = false;
+            removeMultipleVersion = false;
+            removeDoNotParse = true;
+            hitlistFilter = true;
+            jackson_model_dir = "2021-05-25-13-24-28-jackson";
+            jackson_model_names = new String[]{"abstractMemory", "addressBook", "barbers", "cacheMemory", "checkCache",
+                    "checkFixedSize", "closure", "distribution", "filesystem", "fixedSizeMemory", "grandpa", "hotel", "lights",
+                    "lists", "mediaAssets", "phones", "prison", "properties", "ring", "sets", "spanning", "tree", "tube", "undirected"};
+            additional_common_file_names = new String[]{};
+        }
+
         if (gatherFromGithub) {
             // Gather from github
             if (GatherFromGithub() == 1) {
                 logger.warning("Failed to gather models from github");
+                return;
+            }
+        }
+
+        if (recreateModelSets) {
+            if (RecreateModelSet() == 1) {
+                logger.warning("Failed to recreate model set");
                 return;
             }
         }
@@ -1057,10 +1175,17 @@ public class AlloyModelSetTools {
 
         printNumOfFiles();
 
-        // Extract sat and unsat models
-        if (extractSatUnsatModels) {
-            if (ExtractSatUnsatModels() == 1) {
-                logger.warning("Failed to extract SAT and UNSAT models.");
+        if (recreateModelSets) {
+            if (RecreateModelSet() == 1) {
+                logger.warning("Failed to recreate model set");
+                return;
+            }
+        } else {
+            // Extract sat and unsat models
+            if (extractSatUnsatModels) {
+                if (ExtractSatUnsatModels() == 1) {
+                    logger.warning("Failed to extract SAT and UNSAT models.");
+                }
             }
         }
 

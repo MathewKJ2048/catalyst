@@ -42,9 +42,8 @@ public class RunCommand {
     public static Command changeOverallScope(Command cmd, int overall) {
         if (overall == -1) return cmd;
         return new Command(cmd.pos, cmd.nameExpr, cmd.label, cmd.check, overall,
-                cmd.bitwidth, cmd.maxseq, cmd.minprefix, cmd.maxprefix,
-                cmd.expects, new ArrayList<>(), cmd.additionalExactScopes,
-                cmd.formula, cmd.parent);
+                cmd.bitwidth, cmd.maxseq, cmd.expects, new ArrayList<>(),
+                cmd.additionalExactScopes, cmd.formula, cmd.parent);
     }
 
     // Takes in command line arguments: .als file path, whichCommand to be
