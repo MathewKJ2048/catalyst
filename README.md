@@ -17,33 +17,47 @@ is dated by the date is was created. The README.md file within with model set
 directory tells you what filters (programmatically or manually) to create this
 model set.
 
-## Building a Model Set Using the Scripts
+## Using the Scripts
 
-### Setup
+### Dependencies
 
-Put the alloy jar (
-org.alloytools.alloy/org.alloytools.alloy.dist/target/org.alloytools.alloy.dist.jar)
-in /libs subdirectory. You can either clone the org.alloytools.alloy repo,
-follow its instructions to compile it to get a jar or download a jar directly
-from its releases.
+This program is using Alloy 5.1.0 by default. If you want to use another
+version, please replace the alloy jar located at
+libs/org.alloytools.alloy.dist.jar. You can either clone the
+org.alloytools.alloy repo, follow its instructions to compile it to get a jar or
+download a jar directly from its releases.
 
-### Program the filters in the Script
+### Setting options
+
+#### Recreating a Model Set from an Existing csv File
+
+If you want to recreate a model set using an existing csv file, put the csv file
+in model-sets/ directory. Then, set options and path to the csv file you want to
+use in src/main/java/alloymodeltools/alloymodeltools.java.   
+Note it may not recreate the model set exactly the same as before, as git repos
+available online can be updated or become unavailable. You can check which model
+it didn't find in result.csv. Even if a file is reported as "success", there is
+still the possibility that the file content has changed.
+
+#### Building a Model Set Using the Scripts
 
 See src/main/java/alloymodeltools/alloymodeltools.java and choose the sources
 and filters you want to use to create a new model set.
 
-### Method 1: Running the Script directly using gradle
+### Running the scripts
+
+#### Method 1: Running the Script directly using gradle
 
 You can run the script using "./gradlew run"
 
-### Method 2: Separate Compilation and Run
+#### Method 2: Separate Compilation and Run
 
-#### Building the Script
+##### Building the Script
 
 In the root directory, run "./gradlew build". This results in "
 build/libs/allow-model-sets-all.jar" (which is a fat jar built by shadowJar).
 
-#### Running the Scripts
+##### Running the Scripts
 
 Run "java -jar build/libs/alloy-model-sets-all.jar"
 
@@ -142,4 +156,3 @@ model
   one sig A1,A2 extends A  
   run ... for 5 A1 
   ```
-  
