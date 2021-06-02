@@ -75,7 +75,8 @@ otherwise) filters.
   one of the duplicates
 * we perform binary search to look for an overall scope that make the command
   execution time falls in the desired range. We drop all individual scopes and
-  exact scopes when doing binary search.
+  exact scopes when doing binary search, but builtin sets still get their
+  explicit scopes from the original command like "4 int, 6 seq".
 
 ### How the command scopes are set in Alloy
 
