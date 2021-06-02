@@ -40,6 +40,7 @@ import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVPrinter;
 import org.apache.commons.csv.CSVRecord;
 import org.apache.commons.io.FileUtils;
+import org.apache.commons.io.FilenameUtils;
 import oshi.SystemInfo;
 import oshi.hardware.HardwareAbstractionLayer;
 
@@ -74,6 +75,7 @@ public class AlloyModelSetTools {
     // be relative or absolute,  relative path are expected to be relative to
     // "alloy-model-sets/". One example: "model-sets/2021-05-07-14-22-48".
     static String[] existing_model_sets = {};
+    static boolean downloadPlatinumModelSet = false;
     // Whether to remove non-Alloy files, note that hidden files will also be
     // removed.
     static boolean removeNonAlloyFiles = true;
@@ -286,6 +288,58 @@ public class AlloyModelSetTools {
 
             // write to readme github query used
             readmefile.write("Scraped from " + num_git_repos + " github repos with query: " + query + "\n");
+            return 0;
+        } catch (Exception e) {
+            logger.log(Level.SEVERE, e.getMessage(), e);
+            return 1;
+        }
+    }
+
+    static Integer DownloadPlatinumFromGoogleDrive() {
+        // Get download url from sending GET request to the following url
+        ProcessBuilder pb = new ProcessBuilder("bash", "-c", "curl https://drive.google.com/uc\\?export\\=download\\&id\\=1jmfxcB9pr2kBBub-Su43AQsAmleUUAeB");
+        pb.directory(new File(dirname));
+        pb.redirectErrorStream(true);
+        try {
+            Process process = pb.start();
+            BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(process.getInputStream()));
+            String line;
+            String downloadURL = "";
+            while ((line = reader.readLine()) != null) {
+                logger.info(line);
+                // Grab download url
+                if (line.contains("The document has moved")) {
+                    downloadURL = line.split("\"")[1];
+                }
+            }
+            reader.close();
+            int exitVal = process.waitFor();
+            // If we didn't get downloadURL, return 1
+            if (exitVal != 0 | downloadURL.isEmpty()) {
+                logger.warning("Abnormal Behaviour! Something bad happened when requesting Platinum download url.");
+                return 1;
+            }
+
+            // Download the Platinum.zip file and unzip it
+            pb = new ProcessBuilder("bash", "-c", "curl " + downloadURL + " --output Platinum.zip\nunzip Platinum.zip");
+            pb.directory(new File(dirname));
+            pb.redirectErrorStream(true);
+            process = pb.start();
+            reader = new BufferedReader(
+                    new InputStreamReader(process.getInputStream()));
+            while ((line = reader.readLine()) != null) {
+                logger.info(line);
+            }
+            reader.close();
+            exitVal = process.waitFor();
+            if (exitVal != 0) {
+                logger.warning("Abnormal Behaviour! Something bad happened when downloading and unzipping Platinum.zip");
+                return 1;
+            }
+
+            // write to readme github query used
+            readmefile.write("Downloaded Platinum model sets from Google drive.\n");
             return 0;
         } catch (Exception e) {
             logger.log(Level.SEVERE, e.getMessage(), e);
@@ -587,7 +641,7 @@ public class AlloyModelSetTools {
             numFilesRemoved = 0;
             for (File f : new File(dirname).listFiles()) {
                 // Skip the directory containing jackson's original models
-                if (f.isDirectory() && !f.getName().equals(jackson_model_dir)) {
+                if (f.isDirectory()) {
                     HitlistFilter(f.listFiles());
                 }
             }
@@ -920,12 +974,15 @@ public class AlloyModelSetTools {
             if (lastResult.satisfiable.equals("SAT")) {
                 num_sat++;
                 satfile.write(file.getPath().split(dirname + "/", 2)[1] + "\n");
+                satfile.flush();
             } else {
                 num_unsat++;
                 unsatfile.write(file.getPath().split(dirname + "/", 2)[1] + "\n");
+                unsatfile.flush();
             }
             summaryfile.printRecord(file.getPath().split(dirname + "/", 2)[1], lastResult.satisfiable,
-                    command_str);
+                    command_str, scope);
+            summaryfile.flush();
         } catch (Exception e) {
             logger.log(Level.SEVERE, e.getMessage(), e);
             return 1;
@@ -938,7 +995,9 @@ public class AlloyModelSetTools {
             if (file.isDirectory()) {
                 getListFileNames(file.listFiles());
             } else {
-                file_names.add(file.getPath());
+                if (FilenameUtils.getExtension(file.getPath()).equals("als")) {
+                    file_names.add(file.getPath());
+                }
             }
         }
     }
@@ -960,7 +1019,8 @@ public class AlloyModelSetTools {
             csvPrinter = new CSVPrinter(csvWriter, CSVFormat.DEFAULT.withHeader("File Path", "i-th Command",
                     "Original Command", "New Command", "Overall Scope", "Time", "Satisfiable?"));
             csvWriter = new FileWriter(dirname + "/model_summary.csv");
-            summaryfile = new CSVPrinter(csvWriter, CSVFormat.DEFAULT.withHeader("File Path", "Satisfiable?", "New Command"));
+            summaryfile = new CSVPrinter(csvWriter, CSVFormat.DEFAULT.withHeader("File Path", "Satisfiable?", "New " +
+                    "Command", "Scope"));
 
             // Open the .txt files containing sat/unsat model file names
             File f = new File(dirname + "/sat_models.txt");
@@ -1045,7 +1105,7 @@ public class AlloyModelSetTools {
             // Open the CSV reader
             Reader in = new FileReader(pathToSummaryFile);
             Iterable<CSVRecord> records = CSVFormat.DEFAULT
-                    .withHeader("File Path", "Satisfiable?", "New Command")
+                    .withHeader("File Path", "Satisfiable?", "New Command", "Scope")
                     .withFirstRecordAsHeader()
                     .parse(in);
             csvWriter = new FileWriter(dirname + "/result.csv");
@@ -1137,7 +1197,6 @@ public class AlloyModelSetTools {
             removeMultipleVersion = false;
             removeDoNotParse = true;
             hitlistFilter = true;
-            jackson_model_dir = "2021-05-25-13-24-28-jackson";
             jackson_model_names = new String[]{"abstractMemory", "addressBook", "barbers", "cacheMemory", "checkCache",
                     "checkFixedSize", "closure", "distribution", "filesystem", "fixedSizeMemory", "grandpa", "hotel", "lights",
                     "lists", "mediaAssets", "phones", "prison", "properties", "ring", "sets", "spanning", "tree", "tube", "undirected"};
@@ -1152,17 +1211,17 @@ public class AlloyModelSetTools {
             }
         }
 
-        if (recreateModelSets) {
-            if (RecreateModelSet() == 1) {
-                logger.warning("Failed to recreate model set");
+        if (downloadPlatinumModelSet) {
+            // Gather from github
+            if (DownloadPlatinumFromGoogleDrive() == 1) {
+                logger.warning("Failed to download Platinum model set from Google Drive");
                 return;
             }
         }
 
-        // Gather from existing models-sets
-        if (gatherFromExistingModelSets) {
-            if (GatherFromExistingModelSets() == 1) {
-                logger.warning("Failed to gather models from existing model sets");
+        if (recreateModelSets) {
+            if (RecreateModelSet() == 1) {
+                logger.warning("Failed to recreate model set");
                 return;
             }
         }
@@ -1171,6 +1230,14 @@ public class AlloyModelSetTools {
         if (CleanUpFiles() == 1) {
             logger.warning("Failed to remove not needed files");
             return;
+        }
+
+        // Gather from existing models-sets
+        if (gatherFromExistingModelSets) {
+            if (GatherFromExistingModelSets() == 1) {
+                logger.warning("Failed to gather models from existing model sets");
+                return;
+            }
         }
 
         printNumOfFiles();
