@@ -25,7 +25,8 @@ This program is using Alloy 5.1.0 by default. If you want to use another
 version, please replace the alloy jar located at
 libs/org.alloytools.alloy.dist.jar. You can either clone the
 org.alloytools.alloy repo, follow its instructions to compile it to get a jar or
-download a jar directly from its releases.
+download a jar directly from its releases.  
+"curl" and "unzip" need to be installed in Bash command line.
 
 ### Setting options
 
