@@ -60,12 +60,12 @@ import org.apache.commons.codec.binary.Base32;
 public class AlloyModelSetTools {
     // Users set these options.
     // By setting the following option to true, you will recreate a model sets from the supplied
-    // csv file.
+    // csv file. And all the other options will be ignored.
     static boolean recreateModelSets = false;
     // Path to the summary file can either be relative or absolute,  relative path are expected to
     // be relative to "alloy-model-sets/". One example: "model-sets/model_summary.csv".
     static String pathToSummaryFile = "model-sets/model_summary.csv";
-    //  You can choose to gather from Github
+    // You can choose to gather from Github
     // repositories or from existing model sets or both.
     static boolean gatherFromGithub = true;
     // The max number of repos to clone, -1 for downloading all github repos
@@ -661,8 +661,6 @@ public class AlloyModelSetTools {
         pb.redirectErrorStream(true);
         try {
             Process process = pb.start();
-            BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(process.getInputStream()));
             int exitVal = process.waitFor();
             if (exitVal != 0) {
                 logger.warning("Abnormal Behaviour! Something bad happened when cleaning up files.");
@@ -673,6 +671,28 @@ public class AlloyModelSetTools {
             return 1;
         }
 
+        return 0;
+    }
+
+    static Integer RemoveNonAlloyFiles() {
+        String cleanUpCommands = "rm -rf .*\n" + // remove hidden files
+                "find . -mindepth 2 -depth -type f ! -name '*.als' -delete\n" +
+                "find . -type d -empty -delete\n";
+
+        ProcessBuilder pb = new ProcessBuilder("bash", "-c", cleanUpCommands);
+        pb.directory(new File(dirname));
+        pb.redirectErrorStream(true);
+        try {
+            Process process = pb.start();
+            int exitVal = process.waitFor();
+            if (exitVal != 0) {
+                logger.warning("Abnormal Behaviour! Something bad happened when removing non-alloy files.");
+                return 1;
+            }
+        } catch (Exception e) {
+            logger.log(Level.SEVERE, e.getMessage(), e);
+            return 1;
+        }
         return 0;
     }
 
@@ -1196,11 +1216,7 @@ public class AlloyModelSetTools {
             removeDuplicateFiles = false;
             removeMultipleVersion = false;
             removeDoNotParse = true;
-            hitlistFilter = true;
-            jackson_model_names = new String[]{"abstractMemory", "addressBook", "barbers", "cacheMemory", "checkCache",
-                    "checkFixedSize", "closure", "distribution", "filesystem", "fixedSizeMemory", "grandpa", "hotel", "lights",
-                    "lists", "mediaAssets", "phones", "prison", "properties", "ring", "sets", "spanning", "tree", "tube", "undirected"};
-            additional_common_file_names = new String[]{};
+            hitlistFilter = false;
         }
 
         if (gatherFromGithub) {
@@ -1237,6 +1253,13 @@ public class AlloyModelSetTools {
             if (GatherFromExistingModelSets() == 1) {
                 logger.warning("Failed to gather models from existing model sets");
                 return;
+            }
+            // Remove non-Alloy files
+            if (removeNonAlloyFiles) {
+                if (RemoveNonAlloyFiles() == 1) {
+                    logger.warning("Failed to remove non-alloy files.");
+                    return;
+                }
             }
         }
 
