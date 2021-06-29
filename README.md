@@ -3,12 +3,6 @@
 Alloy models is a repository of Alloy models and contains scripts for scraping
 Alloy models and filtering these sets for particular characteristics.
 
-This repo is for internal Watform member use only. The downloaded Alloy files
-from github may not have permissions for us to make them publicly available to
-others.
-
-[NAD: we need to think about what that means for making our artefacts public for papers.]
-
 ## Using the Model Sets
 
 The directory "models-sets" contains sets of Alloy models (sometimes within the
@@ -34,7 +28,7 @@ download a jar directly from its releases.
 
 If you want to recreate a model set using an existing csv file, put the csv file
 in model-sets/ directory. Then, set options and path to the csv file you want to
-use in src/main/java/alloymodeltools/alloymodeltools.java.   
+use in src/main/java/alloymodeltools/RecreateModelSet.java.   
 Note it may not recreate the model set exactly the same as before, as git repos
 available online can be updated or become unavailable. You can check which model
 it didn't find in result.csv. Even if a file is reported as "success", there is
@@ -45,17 +39,29 @@ still the possibility that the file content has changed.
 See src/main/java/alloymodeltools/alloymodeltools.java and choose the sources
 and filters you want to use to create a new model set.
 
+#### Extracting sat and unsat models and choose appropriate scope
+
+Extract a list of sat/unsat models, also find appropriate scopes which let
+solving time fall in a desired range. See
+src/main/java/alloymodeltools/ExtractModels.java and setting the model set
+directory you want to extract models in and other options.
+
 ### Running the scripts
 
 #### Method 1: Running the Script directly using gradle
 
-You can run the script using "./gradlew run"
+You can run the script using "./gradlew -PmainClass=AlloyModelSetTools run"
+where "AlloyModelSetTools" can be replaced by
+"RecreateModelSet" or "ExtractModels" depending on which script you want to run.
 
 #### Method 2: Separate Compilation and Run
 
 ##### Building the Script
 
-In the root directory, run "./gradlew build". This results in "
+In the root directory, run "./gradlew -PmainClass=AlloyModelSetTools build"
+where "AlloyModelSetTools" can be replaced by
+"RecreateModelSet" or "ExtractModels" depending on which script you want to run.
+This results in "
 build/libs/allow-model-sets-all.jar" (which is a fat jar built by shadowJar).
 
 ##### Running the Scripts

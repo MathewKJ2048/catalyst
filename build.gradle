@@ -1,11 +1,11 @@
 plugins {
-  id 'com.github.johnrengelman.shadow' version '6.1.0'
-  id 'java'
+    id 'com.github.johnrengelman.shadow' version '6.1.0'
+    id 'java'
 }
 
 apply plugin: 'application'
 
-mainClassName = 'alloymodelsettools.AlloyModelSetTools'
+mainClassName = 'alloymodelsettools.' + (project.hasProperty("mainClass") ? project.getProperty("mainClass") : 'AlloyModelSetTools')
 
 repositories {
     mavenCentral()
@@ -21,7 +21,7 @@ dependencies {
 
 jar {
     archiveBaseName = 'alloymodelsettools'
-    archiveVersion =  '0.1.0'
+    archiveVersion = '0.1.0'
     manifest {
         attributes 'Main-Class': 'alloymodelsettools.AlloyModelSetTools'
     }
