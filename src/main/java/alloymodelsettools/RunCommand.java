@@ -85,7 +85,7 @@ public class RunCommand {
                 }
             });
             try {
-                System.out.println("Execution time(ns): " + handler.get(Duration.ofSeconds(AlloyModelSetTools.higher_bound_of_time_range_in_seconds + 1).toMillis(), TimeUnit.MILLISECONDS));
+                System.out.println("Execution time(ns): " + handler.get(Duration.ofSeconds(ExtractModels.higher_bound_of_time_range_in_seconds + 1).toMillis(), TimeUnit.MILLISECONDS));
                 System.exit(0);
             } catch (TimeoutException e) {
                 // Timeout
