@@ -164,3 +164,7 @@ model
   one sig A1,A2 extends A  
   run ... for 5 A1 
   ```
+
+## Credits
+
+Catalyst was created by Ruomei Yan, Elias Eid, Amin Bandali, and Nancy A. Day at the University of Waterloo.  It is used by graduate students to create sets of Alloy models for study.
