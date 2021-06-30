@@ -1,12 +1,12 @@
-# Alloy Models
+# Catalyst
 
-Alloy models is a repository of Alloy models and contains scripts for scraping
-Alloy models and filtering these sets for particular characteristics.
+Catalyst contains scripts for scraping
+Alloy models from github, etc. and filtering these sets for particular characteristics.
 
 ## Using the Model Sets
 
-The directory "models-sets" contains sets of Alloy models (sometimes within the
-directory hierarchy they came with) created for various purposes. Each directory
+The directory "models-sets" will contain the created set of Alloy models (sometimes within the
+directory hierarchy they came with). Each directory
 is dated by the date is was created. The README.md file within with model set
 directory tells you what filters (programmatically or manually) to create this
 model set.
@@ -22,7 +22,7 @@ org.alloytools.alloy repo, follow its instructions to compile it to get a jar or
 download a jar directly from its releases.  
 "curl" and "unzip" need to be installed in Bash command line.
 
-### Setting options
+### Options
 
 #### Recreating a Model Set from an Existing csv File
 
