@@ -37,7 +37,6 @@ import java.util.regex.Pattern;
 
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVPrinter;
-import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.FilenameUtils;
 
 import edu.mit.csail.sdg.ast.Command;
@@ -340,7 +339,7 @@ public class ExtractModels {
             // Print files with new commands in sat and unsat directories
             Path path = file.toPath();
             Charset charset = StandardCharsets.UTF_8;
-            String content = FileUtils.readFileToString(file);
+            String content = Files.readString(path, charset);
             // Remove all comments
             content = content.replaceAll("//.*|--.*|/\\*[\\S\\s]*?\\*/", "");
             // Remove all commands using regular expression

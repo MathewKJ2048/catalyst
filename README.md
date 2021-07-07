@@ -1,13 +1,13 @@
 # Catalyst
 
-Catalyst contains scripts for scraping
-Alloy models from github, etc. and filtering these sets for particular characteristics.
+Catalyst contains scripts for scraping Alloy models from github, etc. and
+filtering these sets for particular characteristics.
 
 ## Using the Model Sets
 
-The directory "models-sets" will contain the created set of Alloy models (sometimes within the
-directory hierarchy they came with). Each directory
-is dated by the date is was created. The README.md file within with model set
+The directory "models-sets" will contain the created set of Alloy models (
+sometimes within the directory hierarchy they came with). Each directory is
+dated by the date is was created. The README.md file within with model set
 directory tells you what filters (programmatically or manually) to create this
 model set.
 
@@ -44,7 +44,10 @@ and filters you want to use to create a new model set.
 Extract a list of sat/unsat models, also find appropriate scopes which let
 solving time fall in a desired range. See
 src/main/java/alloymodeltools/ExtractModels.java and setting the model set
-directory you want to extract models in and other options.
+directory you want to extract models in and other options.  
+Note that for finding best scopes analysis it is Java timing Java and we have
+found that when running another time with python controlling the Java process
+the timing can vary significantly.
 
 ### Running the scripts
 
@@ -167,4 +170,6 @@ model
 
 ## Credits
 
-Catalyst was created by Ruomei Yan, Elias Eid, Amin Bandali, and Nancy A. Day at the University of Waterloo.  It is used by graduate students to create sets of Alloy models for study.
+Catalyst was created by Ruomei Yan, Elias Eid, Amin Bandali, and Nancy A. Day at
+the University of Waterloo. It is used by graduate students to create sets of
+Alloy models for study.
