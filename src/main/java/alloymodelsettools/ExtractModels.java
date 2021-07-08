@@ -340,8 +340,12 @@ public class ExtractModels {
             Path path = file.toPath();
             Charset charset = StandardCharsets.UTF_8;
             String content = Files.readString(path, charset);
-            // Remove all comments
-            content = content.replaceAll("//.*|--.*|/\\*[\\S\\s]*?\\*/", "");
+            // Remove all comments, keeps double-quoted string literals
+            // https://stackoverflow.com/questions/24518020/comprehensive-regexp-to-remove-javascript-comments
+            String pattern1 = "(\"(?:\\[\\s\\S]|.)*?\")|//.*?$|--.*?$|/\\*[\\s\\S]*?\\*/";
+            Pattern r1 = Pattern.compile(pattern1, Pattern.MULTILINE);
+            Matcher m1 = r1.matcher(content);
+            content = m1.replaceAll("$1");
             // Remove all commands using regular expression
             // name : ["run" or "check"] anything* until the start of next block
             String pattern = "(\\w+\\s*:\\s*|\\b)(check|run)\\b[\\S\\s]*?(?=(" +
