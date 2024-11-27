@@ -57,6 +57,8 @@ You can run the script using "./gradlew -PmainClass=AlloyModelSetTools run"
 where "AlloyModelSetTools" can be replaced by
 "RecreateModelSet" or "ExtractModels" depending on which script you want to run.
 
+Note that the command `java` needs to be bound to version 11. For linux users, this can be accomplished via the `update-java-alternatives` command. `java --version` reveals the current version, and `update-java-alternatives --list` shows the available versions.
+
 #### Method 2: Separate Compilation and Run
 
 ##### Building the Script
