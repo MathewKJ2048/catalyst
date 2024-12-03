@@ -2,3 +2,10 @@
 .gradle/
 .idea/
 build/
+
+model-sets/** 
+# ignores any folder inside model-sets
+
+!model-sets/*watform
+!model-sets/*jackson
+# excludes the watform and jackson folders from being ignored
